@@ -17,6 +17,8 @@ import java.util.concurrent.CopyOnWriteArrayList
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
@@ -32,15 +34,47 @@ class PreviewController @Inject constructor() {
     private var webViewRef: WeakReference<WebView>? = null
     private val consoleErrors = CopyOnWriteArrayList<String>()
     private val failedRequests = CopyOnWriteArrayList<String>()
+    private val consoleEntries = CopyOnWriteArrayList<ConsoleEntry>()
 
-    fun attach(webView: WebView) { webViewRef = WeakReference(webView) }
+    private val _browserState = MutableStateFlow(BrowserState())
+    val browserState = _browserState.asStateFlow()
+
+    fun attach(webView: WebView) {
+        webViewRef = WeakReference(webView)
+        updateBrowserState(webView)
+    }
     fun detach() { webViewRef = null }
 
-    fun recordConsoleError(message: String) { consoleErrors.add(message.take(500)) }
+    fun recordConsole(level: String, message: String, source: String, line: Int) {
+        val entry = ConsoleEntry(level, message.take(500), source.takeLast(80), line, System.currentTimeMillis())
+        consoleEntries.add(entry)
+        while (consoleEntries.size > 200) consoleEntries.removeAt(0)
+        if (level.equals("ERROR", ignoreCase = true)) consoleErrors.add("${entry.message} (${entry.source}:${entry.line})")
+    }
+
+    fun recordConsoleError(message: String) { recordConsole("ERROR", message, "", 0) }
     fun recordFailedRequest(entry: String) { failedRequests.add(entry.take(300)) }
-    fun clearDiagnostics() { consoleErrors.clear(); failedRequests.clear() }
+    fun clearDiagnostics() { consoleErrors.clear(); failedRequests.clear(); consoleEntries.clear() }
 
     fun diagnostics(): Diagnostics = Diagnostics(consoleErrors.toList(), failedRequests.toList())
+
+    fun consoleLog(): List<ConsoleEntry> = consoleEntries.toList()
+
+    fun updateBrowserState(webView: WebView? = webViewRef?.get()) {
+        if (webView == null) return
+        _browserState.value = BrowserState(
+            url = webView.url.orEmpty(),
+            title = webView.title.orEmpty(),
+            canGoBack = webView.canGoBack(),
+            canGoForward = webView.canGoForward(),
+            progress = webView.progress,
+        )
+    }
+
+    fun goBack() { webViewRef?.get()?.takeIf { it.canGoBack() }?.goBack() }
+    fun goForward() { webViewRef?.get()?.takeIf { it.canGoForward() }?.goForward() }
+    fun reload() { webViewRef?.get()?.reload() }
+    fun loadUrl(url: String) { webViewRef?.get()?.loadUrl(url) }
 
     /**
      * Renders the current WebView content to a PNG file. Uses PixelCopy (captures the GPU-composited
@@ -93,6 +127,14 @@ class PreviewController @Inject constructor() {
     val isAttached: Boolean get() = webViewRef?.get() != null
 
     data class Diagnostics(val consoleErrors: List<String>, val failedRequests: List<String>)
+    data class ConsoleEntry(val level: String, val message: String, val source: String, val line: Int, val at: Long)
+    data class BrowserState(
+        val url: String = "",
+        val title: String = "",
+        val canGoBack: Boolean = false,
+        val canGoForward: Boolean = false,
+        val progress: Int = 0,
+    )
 
     private companion object {
         // Compact role/name/text outline of interactive + landmark elements.

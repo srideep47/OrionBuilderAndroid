@@ -19,6 +19,7 @@ import kotlinx.serialization.json.Json
 object PartType {
     const val TEXT = "text"
     const val THINKING = "thinking"
+    const val TOOL_CALL = "tool_call"
 }
 
 object MsgStatus {
@@ -36,8 +37,20 @@ object MsgRole {
 @Serializable
 private data class PartPayload(val text: String)
 
+/** A tool-call card's data — name, raw args, status (running|done|error), result text, and the
+ * shadow-ref commit to roll back to. Mirrors the desktop tool-call presentation. */
+@Serializable
+data class ToolView(
+    val name: String,
+    val args: String = "",
+    val status: String = "running",
+    val result: String? = null,
+    val snapshotRef: String? = null,
+    val snapshotCommit: String? = null,
+)
+
 /** A message with its ordered parts, ready for rendering. */
-data class UiPart(val type: String, val text: String)
+data class UiPart(val type: String, val text: String, val tool: ToolView? = null)
 data class UiMessage(
     val id: String,
     val role: String,
@@ -79,6 +92,16 @@ class ChatRepository @Inject constructor(
 
     suspend fun renameChat(chat: ChatEntity, title: String) = chatDao.upsert(chat.copy(title = title))
 
+    suspend fun updateSummary(chatId: String, summary: String?) {
+        val chat = chatDao.get(chatId) ?: return
+        chatDao.upsert(chat.copy(summary = summary))
+    }
+
+    suspend fun bindChatProject(chatId: String, projectId: String?, mode: String) {
+        val chat = chatDao.get(chatId) ?: return
+        chatDao.upsert(chat.copy(projectId = projectId, mode = mode))
+    }
+
     suspend fun deleteChat(id: String) {
         messageDao.deleteForChat(id)
         chatDao.delete(id)
@@ -88,7 +111,13 @@ class ChatRepository @Inject constructor(
     fun observeMessages(chatId: String): Flow<List<UiMessage>> =
         messageDao.observeForChat(chatId).map { rows ->
             rows.map { msg ->
-                val parts = messageDao.partsFor(msg.id).map { UiPart(it.type, decode(it.json)) }
+                val parts = messageDao.partsFor(msg.id).map { p ->
+                    if (p.type == PartType.TOOL_CALL) {
+                        UiPart(p.type, "", runCatching { json.decodeFromString<ToolView>(p.json) }.getOrNull())
+                    } else {
+                        UiPart(p.type, decode(p.json))
+                    }
+                }
                 UiMessage(msg.id, msg.role, msg.status, parts, msg.createdAt)
             }
         }
@@ -133,6 +162,29 @@ class ChatRepository @Inject constructor(
         }
         messageDao.update(MessageEntity(messageId, chatId, MsgRole.ASSISTANT, status, clock()))
         if (text.isNotEmpty()) ftsDao.insert(ChatFtsEntity(messageId = messageId, content = text))
+    }
+
+    /**
+     * Finalizes an assistant (agent) turn from an ordered list of parts — text, thinking, and
+     * tool-call cards — preserving order so the transcript renders exactly like it streamed.
+     */
+    suspend fun finishAssistantParts(
+        chatId: String,
+        messageId: String,
+        parts: List<UiPart>,
+        status: String,
+    ) {
+        parts.forEachIndexed { seq, part ->
+            val payload = if (part.type == PartType.TOOL_CALL && part.tool != null) {
+                json.encodeToString(ToolView.serializer(), part.tool)
+            } else {
+                encode(part.text)
+            }
+            messageDao.upsertPart(MessagePartEntity(UUID.randomUUID().toString(), messageId, seq, part.type, payload))
+        }
+        messageDao.update(MessageEntity(messageId, chatId, MsgRole.ASSISTANT, status, clock()))
+        val visible = parts.filter { it.type == PartType.TEXT }.joinToString("\n") { it.text }
+        if (visible.isNotEmpty()) ftsDao.insert(ChatFtsEntity(messageId = messageId, content = visible))
     }
 
     /** Returns message IDs whose text matches an FTS query. */

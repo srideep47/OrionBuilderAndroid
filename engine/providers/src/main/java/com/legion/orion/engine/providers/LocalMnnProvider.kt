@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.flow
 interface LocalChatEngine {
     /** Streams raw decoded text for the given conversation. System prompt passed separately. */
     fun generateChat(system: String?, messages: List<ChatMessage>): Flow<String>
+
+    /** Streams a single prompt turn while preserving the native session history/KV cache. */
+    fun generateTurn(prompt: String): Flow<String>
 }
 
 /**
@@ -37,8 +40,16 @@ class LocalMnnProvider(
         }
         val messages = HermesPrompt.renderForLocal(request.messages)
         val parser = HermesToolCallParser()
+        val fastPrompt = messages.lastOrNull { it.role == ChatMessage.Role.USER }?.content
+            ?.takeIf {
+                request.preferSessionHistory &&
+                    request.tools.isEmpty() &&
+                    request.assistantPrefix.isNullOrBlank() &&
+                    messages.none { msg -> msg.role == ChatMessage.Role.TOOL || msg.toolCalls.isNotEmpty() }
+            }
         try {
-            engine.generateChat(system, messages).collect { raw ->
+            val rawStream = if (fastPrompt != null) engine.generateTurn(fastPrompt) else engine.generateChat(system, messages)
+            rawStream.collect { raw ->
                 parser.push(raw).forEach { emit(it) }
             }
             parser.flush().forEach { emit(it) }

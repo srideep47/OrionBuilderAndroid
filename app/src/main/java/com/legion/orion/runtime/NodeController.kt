@@ -104,6 +104,11 @@ class NodeController @Inject constructor(
         post("/devserver/stop", buildJsonObject { put("port", port) })
     }
 
+    suspend fun devServerLogs(port: Int): String {
+        val resp = post("/devserver/logs", buildJsonObject { put("port", port) })
+        return resp["logs"]?.jsonPrimitive?.contentOrNull.orEmpty()
+    }
+
     private suspend fun post(path: String, body: JsonObject): JsonObject = withContext(Dispatchers.IO) {
         val req = Request.Builder()
             .url("$base$path")
@@ -118,7 +123,7 @@ class NodeController @Inject constructor(
     companion object {
         private const val TAG = "NodeController"
         const val CONTROL_PORT = 8137
-        private const val ASSET_VERSION = "node18-npm1082-babel724-p2p-v4"
+        private const val ASSET_VERSION = "node18-npm1082-babel724-p2p-v5"
         private val JSON_MEDIA = "application/json".toMediaType()
     }
 }

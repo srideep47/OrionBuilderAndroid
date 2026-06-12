@@ -3,6 +3,7 @@ package com.legion.orion.core.datastore
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -23,6 +24,10 @@ class SettingsRepository @Inject constructor(
         val DARK_THEME = booleanPreferencesKey("dark_theme")
         val SELECTED_PROVIDER_ID = stringPreferencesKey("selected_provider_id")
         val SELECTED_MODEL_ID = stringPreferencesKey("selected_model_id")
+        val COMPACTION_ENABLED = booleanPreferencesKey("compaction_enabled")
+        val COMPACTION_THRESHOLD_PERCENT = intPreferencesKey("compaction_threshold_percent")
+        val COMPACTION_KEEP_RECENT_TURNS = intPreferencesKey("compaction_keep_recent_turns")
+        val COMPACTION_NOTIFY = booleanPreferencesKey("compaction_notify")
     }
 
     val lastModelPath: Flow<String?> =
@@ -40,6 +45,18 @@ class SettingsRepository @Inject constructor(
     val selectedModelId: Flow<String?> =
         context.settingsDataStore.data.map { it[Keys.SELECTED_MODEL_ID] }
 
+    val compactionEnabled: Flow<Boolean> =
+        context.settingsDataStore.data.map { it[Keys.COMPACTION_ENABLED] ?: true }
+
+    val compactionThresholdPercent: Flow<Int> =
+        context.settingsDataStore.data.map { it[Keys.COMPACTION_THRESHOLD_PERCENT] ?: 75 }
+
+    val compactionKeepRecentTurns: Flow<Int> =
+        context.settingsDataStore.data.map { it[Keys.COMPACTION_KEEP_RECENT_TURNS] ?: 6 }
+
+    val compactionNotify: Flow<Boolean> =
+        context.settingsDataStore.data.map { it[Keys.COMPACTION_NOTIFY] ?: true }
+
     suspend fun setLastModel(path: String, backend: String) {
         context.settingsDataStore.edit {
             it[Keys.LAST_MODEL_PATH] = path
@@ -56,5 +73,21 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setDarkTheme(enabled: Boolean) {
         context.settingsDataStore.edit { it[Keys.DARK_THEME] = enabled }
+    }
+
+    suspend fun setCompactionEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[Keys.COMPACTION_ENABLED] = enabled }
+    }
+
+    suspend fun setCompactionThresholdPercent(value: Int) {
+        context.settingsDataStore.edit { it[Keys.COMPACTION_THRESHOLD_PERCENT] = value.coerceIn(50, 95) }
+    }
+
+    suspend fun setCompactionKeepRecentTurns(value: Int) {
+        context.settingsDataStore.edit { it[Keys.COMPACTION_KEEP_RECENT_TURNS] = value.coerceIn(2, 20) }
+    }
+
+    suspend fun setCompactionNotify(enabled: Boolean) {
+        context.settingsDataStore.edit { it[Keys.COMPACTION_NOTIFY] = enabled }
     }
 }

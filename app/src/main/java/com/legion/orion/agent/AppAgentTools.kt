@@ -31,6 +31,7 @@ class AppAgentTools @Inject constructor(
     private val apkBuilder: ApkBuildController,
     private val buildOffload: com.legion.orion.p2p.BuildOffloadManager,
     private val p2p: com.legion.orion.infra.p2p.P2pController,
+    private val media: com.legion.orion.data.media.MediaManager,
 ) {
     fun list(): List<AgentTool> = listOf(
         CreateProjectTool(scaffolds),
@@ -46,7 +47,34 @@ class AppAgentTools @Inject constructor(
         BuildApkTool(apkBuilder),
         RunBuildJobTool(buildOffload, p2p),
         CheckBuildJobTool(buildOffload),
+        QueueMediaJobTool(media),
     )
+}
+
+/** Queues an image/video generation job to a P2P peer — NEVER generated locally. */
+private class QueueMediaJobTool(private val media: com.legion.orion.data.media.MediaManager) : AgentTool {
+    override val name = "queue_media_job"
+    override val description =
+        "Queue an image or video generation job to a connected compute peer. Generation never runs on this device. " +
+            "Returns a job id; the result lands in the Media gallery when the peer finishes."
+    override val parameters = objectSchema(
+        Param("type", "string", "Media type: image | video"),
+        Param("prompt", "string", "The generation prompt"),
+        Param("params", "string", "Optional JSON object of extra params (size, steps, seed…)", required = false),
+    )
+    override val mutating = true
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+        val type = args.str("type")?.lowercase() ?: return ToolResult("Missing 'type'", isError = true)
+        if (type != "image" && type != "video") return ToolResult("type must be 'image' or 'video'", isError = true)
+        val prompt = args.str("prompt") ?: return ToolResult("Missing 'prompt'", isError = true)
+        val params = args.str("params")
+        return runCatching {
+            val jobId = media.queue(type, prompt, params)
+            val note = if (media.hasComputePeer()) "submitted to a compute peer" else "queued (waiting for a compute peer)"
+            ToolResult("Media job $jobId $note. Track progress in the Media tab.")
+        }.getOrElse { ToolResult("Failed to queue media job: ${it.message}", isError = true) }
+    }
 }
 
 private fun JsonObject.str(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull

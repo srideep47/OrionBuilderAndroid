@@ -43,6 +43,20 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Captures the YouTube OAuth consent redirect (com.legion.orion:/oauth2redirect). -->
+        <activity
+            android:name=".publish.OAuthRedirectActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.legion.orion" />
+            </intent-filter>
+        </activity>
+
     </application>
 
 </manifest>

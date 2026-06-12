@@ -187,6 +187,15 @@ const RESOLVE_EXT = ['.tsx', '.ts', '.jsx', '.js', '.mjs'];
 
 const devServers = new Map();      // port -> { server, root, watcher }
 const sseClients = new Map();      // root -> Set<res>
+const devLogs = new Map();         // port -> string[]
+
+function pushDevLog(port, line) {
+  if (!port) return;
+  const rows = devLogs.get(port) || [];
+  rows.push(`[${new Date().toLocaleTimeString()}] ${String(line).slice(0, 1200)}`);
+  while (rows.length > 300) rows.shift();
+  devLogs.set(port, rows);
+}
 
 // Resolve a request path to an on-disk file, trying extension/index variants (extensionless imports).
 function resolveFile(file) {
@@ -249,20 +258,22 @@ function makeHandler(root) {
   const hasPkg = fs.existsSync(path.join(root, 'package.json'));
   return (req, res) => {
     try {
+      const port = req.socket && req.socket.localPort;
       const u = new URL(req.url, 'http://127.0.0.1');
       let rel = decodeURIComponent(u.pathname);
       if (rel === '/__orion/sse') return handleSse(root, res);
       if (rel === '/' || rel === '') rel = '/index.html';
+      pushDevLog(port, `${req.method} ${rel}`);
 
       let file = path.join(root, rel);
-      if (!path.resolve(file).startsWith(resolvedRoot)) { res.writeHead(403); res.end('forbidden'); return; }
+      if (!path.resolve(file).startsWith(resolvedRoot)) { pushDevLog(port, `403 ${rel}`); res.writeHead(403); res.end('forbidden'); return; }
 
       let target = resolveFile(file);
       if (!target) {
         // SPA fallback for navigations; 404 for asset/module fetches.
         const accept = req.headers.accept || '';
         if (accept.includes('text/html')) target = path.join(root, 'index.html');
-        if (!target || !fs.existsSync(target)) { res.writeHead(404); res.end('not found'); return; }
+        if (!target || !fs.existsSync(target)) { pushDevLog(port, `404 ${rel}`); res.writeHead(404); res.end('not found'); return; }
       }
 
       const ext = path.extname(target).toLowerCase();
@@ -279,6 +290,7 @@ function makeHandler(root) {
         try { js = transformCode(src, target); }
         catch (e) {
           const msg = 'Transform failed in ' + path.relative(root, target) + ': ' + (e && e.message ? e.message : e);
+          pushDevLog(port, msg);
           js = `console.error(${JSON.stringify(msg)});\nthrow new Error(${JSON.stringify(msg)});`;
         }
         send(res, 200, 'text/javascript', js);
@@ -293,6 +305,7 @@ function makeHandler(root) {
       res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
       fs.createReadStream(target).pipe(res);
     } catch (e) {
+      try { pushDevLog(req.socket && req.socket.localPort, `500 ${String(e && e.stack ? e.stack : e)}`); } catch (_) {}
       res.writeHead(500); res.end(String(e));
     }
   };
@@ -305,6 +318,7 @@ function startDevServer(root, port) {
     server.listen(port, '127.0.0.1', () => {
       const actual = server.address().port;
       devServers.set(actual, { server, root, watcher: startWatcher(root) });
+      pushDevLog(actual, `dev server started for ${root}`);
       resolve(actual);
     });
   });
@@ -316,6 +330,7 @@ function stopDevServer(port) {
     try { clearInterval(entry.watcher); } catch (_) {}
     try { entry.server.close(); } catch (_) {}
     devServers.delete(port);
+    pushDevLog(port, 'dev server stopped');
     return true;
   }
   return false;
@@ -349,6 +364,7 @@ const routes = {
     return { port };
   },
   '/devserver/stop': async (body) => ({ stopped: stopDevServer(body.port) }),
+  '/devserver/logs': async (body) => ({ logs: (devLogs.get(body.port) || []).join('\n') }),
 
   '/fs/read': async (body) => ({ content: fs.readFileSync(body.path, 'utf8') }),
   '/fs/write': async (body) => { fs.mkdirSync(path.dirname(body.path), { recursive: true }); fs.writeFileSync(body.path, body.content); return { ok: true }; },

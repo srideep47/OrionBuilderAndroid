@@ -39,10 +39,14 @@ class InferenceController @Inject constructor() : LocalChatEngine {
     private val _state = MutableStateFlow(EngineState())
     val state = _state.asStateFlow()
 
-    suspend fun load(modelDir: String, backend: MnnBackend) = mutex.withLock {
+    suspend fun load(
+        modelDir: String,
+        backend: MnnBackend,
+        settings: com.legion.orion.engine.mnn.MnnSettings? = null,
+    ) = mutex.withLock {
         _state.value = EngineState(EngineState.Status.LOADING, modelDir, backend)
         try {
-            engine.load(modelDir, backend)
+            engine.load(modelDir, backend, settings)
             _state.value = EngineState(EngineState.Status.READY, modelDir, backend)
         } catch (t: Throwable) {
             _state.value = EngineState(EngineState.Status.ERROR, modelDir, backend, t.message)
@@ -53,6 +57,9 @@ class InferenceController @Inject constructor() : LocalChatEngine {
     /** Streams a single-prompt generation. Marks state GENERATING for its duration. */
     fun generate(prompt: String): Flow<GenerationChunk> =
         engine.generate(prompt).withGeneratingState()
+
+    override fun generateTurn(prompt: String): Flow<String> =
+        engine.generate(prompt).withGeneratingState().map { it.text }
 
     /**
      * [LocalChatEngine] bridge for the chat provider: renders the conversation to (role, content)

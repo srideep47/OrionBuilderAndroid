@@ -45,6 +45,11 @@ data class ChatRequest(
     val tools: List<ToolSchema> = emptyList(),
     /** Carries the partial assistant text when resuming an interrupted stream. */
     val assistantPrefix: String? = null,
+    /**
+     * Local-only hint: when true, the provider may send only the newest user prompt and rely on
+     * the native session's keep-history KV cache instead of re-prefilling the full transcript.
+     */
+    val preferSessionHistory: Boolean = false,
 )
 
 /**

@@ -3,10 +3,12 @@ package com.legion.orion.feature.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.legion.orion.core.database.ProviderEntity
+import com.legion.orion.core.datastore.SettingsRepository
 import com.legion.orion.data.providers.ProviderRepository
 import com.legion.orion.data.providers.ProviderType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -22,11 +24,16 @@ data class ProviderRow(
 
 data class SettingsUiState(
     val rows: List<ProviderRow> = emptyList(),
+    val compactionEnabled: Boolean = true,
+    val compactionThresholdPercent: Int = 75,
+    val compactionKeepRecentTurns: Int = 6,
+    val compactionNotify: Boolean = true,
 )
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val providerRepo: ProviderRepository,
+    private val settings: SettingsRepository,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(SettingsUiState())
@@ -37,6 +44,19 @@ class SettingsViewModel @Inject constructor(
         providerRepo.observeProviders()
             .onEach { providers -> refresh(providers) }
             .launchIn(viewModelScope)
+        combine(
+            settings.compactionEnabled,
+            settings.compactionThresholdPercent,
+            settings.compactionKeepRecentTurns,
+            settings.compactionNotify,
+        ) { enabled, threshold, keepRecent, notify ->
+            _ui.value.copy(
+                compactionEnabled = enabled,
+                compactionThresholdPercent = threshold,
+                compactionKeepRecentTurns = keepRecent,
+                compactionNotify = notify,
+            )
+        }.onEach { _ui.value = it }.launchIn(viewModelScope)
     }
 
     private suspend fun refresh(providers: List<ProviderEntity>) {
@@ -49,7 +69,7 @@ class SettingsViewModel @Inject constructor(
                     needsBaseUrl = p.type == ProviderType.OPENAI_COMPAT,
                 )
             }
-        _ui.value = SettingsUiState(rows)
+        _ui.value = _ui.value.copy(rows = rows)
     }
 
     fun saveKey(provider: ProviderEntity, key: String) {
@@ -61,5 +81,21 @@ class SettingsViewModel @Inject constructor(
 
     fun saveBaseUrl(provider: ProviderEntity, baseUrl: String) {
         viewModelScope.launch { providerRepo.setBaseUrl(provider, baseUrl.trim()) }
+    }
+
+    fun setCompactionEnabled(enabled: Boolean) {
+        viewModelScope.launch { settings.setCompactionEnabled(enabled) }
+    }
+
+    fun setCompactionThresholdPercent(value: Int) {
+        viewModelScope.launch { settings.setCompactionThresholdPercent(value) }
+    }
+
+    fun setCompactionKeepRecentTurns(value: Int) {
+        viewModelScope.launch { settings.setCompactionKeepRecentTurns(value) }
+    }
+
+    fun setCompactionNotify(enabled: Boolean) {
+        viewModelScope.launch { settings.setCompactionNotify(enabled) }
     }
 }

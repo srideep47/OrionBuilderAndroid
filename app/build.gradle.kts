@@ -120,6 +120,8 @@ dependencies {
     implementation(libs.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
+    implementation(libs.coil.compose)
+    implementation(libs.work.runtime)
     implementation(libs.sora.editor)
     implementation(libs.jgit)
 

@@ -84,6 +84,9 @@ interface LocalModelDao {
     @Query("SELECT * FROM local_models")
     fun observeAll(): Flow<List<LocalModelEntity>>
 
+    @Query("SELECT * FROM local_models")
+    suspend fun all(): List<LocalModelEntity>
+
     @Query("SELECT * FROM local_models WHERE id = :id")
     suspend fun get(id: String): LocalModelEntity?
 
@@ -135,8 +138,17 @@ interface JobsDao {
     @Query("SELECT * FROM media_jobs ORDER BY createdAt DESC")
     fun observeMediaJobs(): Flow<List<MediaJobEntity>>
 
+    @Query("SELECT * FROM media_jobs WHERE id = :id")
+    suspend fun mediaJob(id: String): MediaJobEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertMediaJob(job: MediaJobEntity)
+
+    @Query("DELETE FROM media_jobs WHERE id = :id")
+    suspend fun deleteMediaJob(id: String)
+
+    @Query("SELECT * FROM publish_jobs WHERE id = :id")
+    suspend fun publishJob(id: String): PublishJobEntity?
 
     @Query("SELECT * FROM build_jobs")
     fun observeBuildJobs(): Flow<List<BuildJobEntity>>
