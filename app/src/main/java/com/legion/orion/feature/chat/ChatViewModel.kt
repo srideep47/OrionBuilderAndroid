@@ -58,6 +58,7 @@ class ChatViewModel @Inject constructor(
     private val providerRepo: ProviderRepository,
     private val resolver: ProviderResolver,
     private val settings: SettingsRepository,
+    private val p2pCoordinator: com.legion.orion.p2p.P2pCoordinator,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(ChatUiState())
@@ -97,6 +98,23 @@ class ChatViewModel @Inject constructor(
                 rebuildConversationFrom(recent.id)
             }
         }
+
+        // Keep the provider list live: stored providers plus trusted online peers offering compute,
+        // so a friend's desktop model is selectable like any other provider.
+        viewModelScope.launch {
+            combine(providerRepo.observeProviders(), p2pCoordinator.peers) { stored, peers ->
+                stored + peers
+                    .filter { it.isTrusted && it.status == "online" && it.computeAvailable }
+                    .map { ProviderResolver.peerProviderEntity(it) }
+            }.collect { all ->
+                val current = _ui.value
+                val reselected = current.selectedProvider?.let { sel -> all.firstOrNull { it.id == sel.id } }
+                _ui.value = current.copy(
+                    providers = all,
+                    selectedProvider = reselected ?: current.selectedProvider ?: all.firstOrNull(),
+                )
+            }
+        }
     }
 
     fun onInput(text: String) { _ui.value = _ui.value.copy(input = text) }
@@ -109,7 +127,12 @@ class ChatViewModel @Inject constructor(
     /** Picks a provider and auto-selects its default (first) model. */
     fun chooseProvider(provider: ProviderEntity) {
         viewModelScope.launch {
-            val model = providerRepo.modelsFor(provider.id).firstOrNull()?.modelId ?: ""
+            val model = if (provider.type == com.legion.orion.data.providers.ProviderType.PEER) {
+                // Peer entries have no stored models; the serving side runs whatever it has loaded.
+                "remote-peer"
+            } else {
+                providerRepo.modelsFor(provider.id).firstOrNull()?.modelId ?: ""
+            }
             selectProvider(provider, model)
         }
     }

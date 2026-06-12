@@ -22,14 +22,17 @@ object NodeRuntime {
         private set
 
     private external fun nativeStart(args: Array<String>): Int
-    private external fun nativeRedirectOutput()
+    private external fun nativeRedirectOutput(stderrFile: String)
 
     /**
      * Starts Node with `node <scriptPath> <extraArgs...>`. Blocks the current thread until Node
      * exits — call from a dedicated thread.
      */
     fun startBlocking(scriptPath: String, extraArgs: List<String> = emptyList()): Int {
-        nativeRedirectOutput()
+        // stderr goes to a file (not the logcat pipe) so Node's dying fatal message survives an
+        // in-process exit(1) — the pipe pump thread dies with the process and loses buffered data.
+        val stderrLog = java.io.File(java.io.File(scriptPath).parentFile, "stderr.log").absolutePath
+        nativeRedirectOutput(stderrLog)
         running = true
         return try {
             nativeStart(arrayOf("node", scriptPath, *extraArgs.toTypedArray()))

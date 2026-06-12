@@ -29,6 +29,8 @@ class AppAgentTools @Inject constructor(
     private val devServerState: DevServerState,
     private val preview: PreviewController,
     private val apkBuilder: ApkBuildController,
+    private val buildOffload: com.legion.orion.p2p.BuildOffloadManager,
+    private val p2p: com.legion.orion.infra.p2p.P2pController,
 ) {
     fun list(): List<AgentTool> = listOf(
         CreateProjectTool(scaffolds),
@@ -42,6 +44,8 @@ class AppAgentTools @Inject constructor(
         BrowserQaGateTool(preview),
         InstallBuildToolchainTool(apkBuilder),
         BuildApkTool(apkBuilder),
+        RunBuildJobTool(buildOffload, p2p),
+        CheckBuildJobTool(buildOffload),
     )
 }
 
@@ -237,6 +241,61 @@ private class BuildApkTool(private val builder: ApkBuildController) : AgentTool 
         val tail = log.toString().lines().takeLast(60).joinToString("\n")
         return if (result.success) ToolResult("APK built: ${result.apk?.name}\n$tail")
         else ToolResult("Build failed (exit=${result.exitCode}).\n$tail", isError = true)
+    }
+}
+
+/** Offloads a native desktop build (win/linux/mac) to a trusted peer over P2P. */
+private class RunBuildJobTool(
+    private val offload: com.legion.orion.p2p.BuildOffloadManager,
+    private val p2p: com.legion.orion.infra.p2p.P2pController,
+) : AgentTool {
+    override val name = "run_build_job"
+    override val description =
+        "Offload a native desktop build (win | linux | mac) of this project to a trusted online " +
+            "peer over the Orion network. Returns a job id; poll with check_build_job. Phones " +
+            "cannot run desktop toolchains locally."
+    override val parameters = objectSchema(
+        Param("target", "string", "Build target: win | linux | mac"),
+        Param("peer", "string", "Public key (or prefix) of the peer to use; omit to auto-pick", required = false),
+    )
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+        val target = args.str("target")?.lowercase() ?: return ToolResult("Missing 'target'", isError = true)
+        if (target !in setOf("win", "linux", "mac")) {
+            return ToolResult("Invalid target '$target' (win | linux | mac)", isError = true)
+        }
+        val peers = p2p.peers.value.filter { it.isTrusted && it.status == "online" }
+        val wanted = args.str("peer")
+        val peer = when {
+            wanted != null -> peers.firstOrNull { it.publicKey.startsWith(wanted, ignoreCase = true) }
+                ?: return ToolResult("Peer '$wanted' is not a connected trusted peer", isError = true)
+            else -> peers.firstOrNull { it.deviceType in setOf("desktop", "laptop") }
+                ?: return ToolResult(
+                    "No trusted desktop peer is online. Go online on the Network tab and befriend a desktop running Orion Builder.",
+                    isError = true,
+                )
+        }
+        return runCatching {
+            val jobId = offload.submit(ctx.projectDir.name, ctx.projectDir, target, peer.publicKey)
+            ToolResult("Build job $jobId submitted to ${peer.displayName} ($target). Poll with check_build_job.")
+        }.getOrElse { ToolResult("Submit failed: ${it.message}", isError = true) }
+    }
+}
+
+/** Polls a previously submitted offloaded build job. */
+private class CheckBuildJobTool(
+    private val offload: com.legion.orion.p2p.BuildOffloadManager,
+) : AgentTool {
+    override val name = "check_build_job"
+    override val description = "Check the status and recent log of an offloaded build job (from run_build_job)."
+    override val parameters = objectSchema(Param("job_id", "string", "The job id returned by run_build_job"))
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+        val jobId = args.str("job_id") ?: return ToolResult("Missing 'job_id'", isError = true)
+        val job = offload.job(jobId) ?: return ToolResult("Unknown job '$jobId'", isError = true)
+        val log = job.logTail?.takeLast(2000) ?: ""
+        val artifact = job.artifactPath?.let { "\nartifact: $it" } ?: ""
+        return ToolResult("state=${job.state} target=${job.target}$artifact\n$log", isError = job.state == "failed")
     }
 }
 

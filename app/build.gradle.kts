@@ -93,6 +93,7 @@ dependencies {
     implementation(project(":engine:server"))
     implementation(project(":engine:agent"))
     implementation(project(":infra:git"))
+    implementation(project(":infra:p2p"))
     implementation(project(":runtime:node"))
     implementation(project(":runtime:buildtools"))
 
@@ -120,6 +121,7 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
     implementation(libs.sora.editor)
+    implementation(libs.jgit)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.ext.junit)

@@ -1,0 +1,168 @@
+package com.legion.orion.infra.p2p
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+
+/**
+ * Kotlin mirrors of the p2p-bridge.js wire JSON. The bridge speaks the desktop Orion Builder
+ * protocol byte-for-byte; these types only describe the localhost control API + SSE envelope
+ * between Kotlin and the in-process bridge, never the peer wire itself.
+ */
+
+/** A peer as the bridge reports it (see placeholderPeer/METADATA handling in p2p-bridge.js). */
+@Serializable
+data class P2pPeer(
+    val publicKey: String,
+    val fingerprint: String = "",
+    val displayName: String = "",
+    val deviceName: String = "—",
+    val deviceType: String = "desktop",
+    /** connecting | online */
+    val status: String = "connecting",
+    val isTrusted: Boolean = false,
+    val isLan: Boolean = false,
+    val latencyMs: Long? = null,
+    val loadedModels: List<String> = emptyList(),
+    val gpuUtilization: Double = 0.0,
+    val computeAvailable: Boolean = false,
+    val appVersion: String = "",
+)
+
+@Serializable
+data class FriendRequest(
+    val fromPublicKey: String,
+    val fromDisplayName: String = "",
+    val fromDeviceName: String = "",
+)
+
+/** Compute-load payload broadcast to peers (LOAD_UPDATE) and pushed to the bridge via /compute/set. */
+@Serializable
+data class ComputeState(
+    val gpuUtilization: Double = 0.0,
+    val loadedModels: List<String> = emptyList(),
+    val computeAvailable: Boolean = false,
+    val queueDepth: Int = 0,
+)
+
+/** Startup config injected into the bridge (identity seed + this device's display metadata). */
+@Serializable
+data class BridgeConfig(
+    val controlPort: Int,
+    val seedHex: String,
+    val displayName: String,
+    val deviceName: String,
+    val deviceType: String = "phone",
+    val appVersion: String = "",
+    val lanPort: Int = 38291,
+    /**
+     * Whether the bridge may require() the hyperswarm native addons. Always false on-device:
+     * nodejs-mobile silently exit(1)s on process.dlopen of any .node addon, so the bridge runs in
+     * pure-JS LAN mode there (authenticated TCP channels) and upgrades to full DHT automatically
+     * once addon loading works.
+     */
+    val useNatives: Boolean = false,
+)
+
+@Serializable
+data class P2pStatus(
+    val isOnline: Boolean = false,
+    val self: String = "",
+    /** "full" (hyperswarm DHT + Noise) or "lan" (pure-JS LAN fallback). */
+    val mode: String = "lan",
+    val nativeError: String? = null,
+    val peers: List<P2pPeer> = emptyList(),
+)
+
+/** Result of POST /p2p/start on the host (echoes self pubkey + the bridge's control port). */
+@Serializable
+data class BridgeStartResult(
+    val ok: Boolean = false,
+    val self: String = "",
+    val controlPort: Int = 0,
+    val mode: String = "lan",
+    val nativeError: String? = null,
+    val alreadyRunning: Boolean = false,
+    val swarmError: String? = null,
+)
+
+/**
+ * Decoded SSE event from the bridge's /events stream. The raw envelope is {event, data}; the data
+ * shape varies per event (see emit(...) calls in p2p-bridge.js).
+ */
+sealed interface P2pEvent {
+    data class Status(val isOnline: Boolean, val self: String, val mode: String = "lan") : P2pEvent
+    data class PeersChanged(val peers: List<P2pPeer>) : P2pEvent
+    data class PeerOnline(val peer: P2pPeer) : P2pEvent
+    data class FriendRequestReceived(val request: FriendRequest) : P2pEvent
+    data class FriendAccepted(val publicKey: String) : P2pEvent
+    data class InferenceRequested(val peerId: String, val requestId: String, val body: JsonElement) : P2pEvent
+    data class InferenceCancelled(val peerId: String, val requestId: String) : P2pEvent
+    data class InferenceChunk(val requestId: String, val data: JsonElement) : P2pEvent
+    data class InferenceDone(val requestId: String) : P2pEvent
+    data class InferenceError(val requestId: String, val error: String) : P2pEvent
+    data class MediaAccepted(val peerId: String, val jobId: String) : P2pEvent
+    data class MediaProgress(val peerId: String, val jobId: String, val progress: Double, val stage: String) : P2pEvent
+    data class MediaResult(val peerId: String, val jobId: String, val mimeType: String, val dataBase64: String, val fileName: String) : P2pEvent
+    data class MediaError(val peerId: String, val jobId: String, val error: String) : P2pEvent
+    data class BuildAccepted(val peerId: String, val jobId: String) : P2pEvent
+    data class BuildLog(val peerId: String, val jobId: String, val line: String) : P2pEvent
+    data class BuildResult(val peerId: String, val jobId: String, val ok: Boolean, val artifactName: String?, val artifactBase64: String?, val error: String?) : P2pEvent
+    data class Unknown(val event: String) : P2pEvent
+}
+
+// Envelope helpers used by the SSE decoder.
+@Serializable
+internal data class StatusData(val isOnline: Boolean = false, val self: String = "", val mode: String = "lan")
+
+@Serializable
+internal data class FriendAcceptedData(val publicKey: String)
+
+@Serializable
+internal data class InferenceRequestData(val peerId: String, val requestId: String, val body: JsonElement)
+
+@Serializable
+internal data class InferenceCancelData(val peerId: String, val requestId: String)
+
+@Serializable
+internal data class InferenceChunkData(val requestId: String, val data: JsonElement)
+
+@Serializable
+internal data class InferenceDoneData(val requestId: String)
+
+@Serializable
+internal data class InferenceErrorData(val requestId: String, @SerialName("error") val error: String)
+
+@Serializable
+internal data class MediaAcceptedData(val peerId: String, val jobId: String)
+
+@Serializable
+internal data class MediaProgressData(val peerId: String, val jobId: String, val progress: Double = 0.0, val stage: String = "")
+
+@Serializable
+internal data class MediaResultData(
+    val peerId: String,
+    val jobId: String,
+    val mimeType: String = "application/octet-stream",
+    val dataBase64: String = "",
+    val fileName: String = "",
+)
+
+@Serializable
+internal data class MediaErrorData(val peerId: String, val jobId: String, val error: String = "")
+
+@Serializable
+internal data class BuildAcceptedData(val peerId: String, val jobId: String)
+
+@Serializable
+internal data class BuildLogData(val peerId: String, val jobId: String, val line: String = "")
+
+@Serializable
+internal data class BuildResultData(
+    val peerId: String,
+    val jobId: String,
+    val ok: Boolean = false,
+    val artifactName: String? = null,
+    val artifactBase64: String? = null,
+    val error: String? = null,
+)

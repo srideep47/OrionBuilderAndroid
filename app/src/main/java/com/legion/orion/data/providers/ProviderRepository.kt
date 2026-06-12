@@ -15,6 +15,9 @@ object ProviderType {
     const val GOOGLE = "google"
     const val OPENAI_COMPAT = "openai_compat"
     const val MNN_LOCAL = "mnn_local"
+
+    /** A trusted online peer's model, reached over the P2P channel. Never persisted to Room. */
+    const val PEER = "peer"
 }
 
 /**

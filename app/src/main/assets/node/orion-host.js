@@ -25,6 +25,10 @@ const CONTROL_PORT = parseInt(process.argv[2] || '8137', 10);
 const NPM_CLI = process.argv[3] || '';
 const HOST_DIR = __dirname;
 
+// P2P bridge module + its last start info, loaded lazily and hosted in this same Node process.
+let _p2pBridge = null;
+let _p2pInfo = null;
+
 // ---- helpers ---------------------------------------------------------------
 
 function sendJson(res, code, obj) {
@@ -39,10 +43,14 @@ function send(res, code, type, body) {
 }
 
 function readBody(req) {
-  return new Promise((resolve) => {
+  // JSON.parse must not throw inside the 'end' handler — an uncaught exception there would kill
+  // the whole Node process. Malformed bodies reject and surface as a 500 from the route handler.
+  return new Promise((resolve, reject) => {
     let data = '';
     req.on('data', (c) => (data += c));
-    req.on('end', () => resolve(data ? JSON.parse(data) : {}));
+    req.on('end', () => {
+      try { resolve(data ? JSON.parse(data) : {}); } catch (e) { reject(new Error('malformed JSON body')); }
+    });
   });
 }
 
@@ -344,6 +352,19 @@ const routes = {
 
   '/fs/read': async (body) => ({ content: fs.readFileSync(body.path, 'utf8') }),
   '/fs/write': async (body) => { fs.mkdirSync(path.dirname(body.path), { recursive: true }); fs.writeFileSync(body.path, body.content); return { ok: true }; },
+
+  // P2P bridge runs IN-PROCESS (nodejs-mobile can't spawn a second node). The bridge opens its own
+  // control server on body.controlPort; Kotlin talks to that port directly after start succeeds.
+  '/p2p/start': async (body) => {
+    if (!_p2pBridge) _p2pBridge = require(path.join(HOST_DIR, 'p2p-bridge.js'));
+    _p2pInfo = await _p2pBridge.startBridge(body);
+    return { ok: true, ..._p2pInfo };
+  },
+  '/p2p/stop': async () => {
+    if (_p2pBridge) { try { await _p2pBridge.stopBridge(); } catch (_) {} }
+    _p2pInfo = null;
+    return { ok: true };
+  },
 };
 
 const control = http.createServer(async (req, res) => {

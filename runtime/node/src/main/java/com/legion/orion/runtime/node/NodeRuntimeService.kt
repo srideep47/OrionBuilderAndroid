@@ -27,7 +27,10 @@ class NodeRuntimeService : Service() {
         if (script != null && nodeThread == null) {
             nodeThread = Thread({ NodeRuntime.startBlocking(script, args) }, "node-main").apply { start() }
         }
-        return START_STICKY
+        // START_REDELIVER_INTENT (not STICKY): if the :node process dies — e.g. a native addon
+        // aborts the Node VM — Android restarts the service WITH the original intent (script path),
+        // so onStartCommand re-launches Node instead of getting a null intent and idling dead.
+        return START_REDELIVER_INTENT
     }
 
     private fun buildNotification(): Notification {

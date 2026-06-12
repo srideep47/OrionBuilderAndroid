@@ -23,6 +23,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.legion.orion.feature.chat.ChatScreen
 import com.legion.orion.feature.engine.EngineScreen
+import com.legion.orion.feature.network.NetworkScreen
 import com.legion.orion.feature.settings.SettingsScreen
 import com.legion.orion.feature.workspace.BuildWorkspace
 
@@ -61,7 +62,7 @@ fun OrionApp() {
             composable(TopDestination.CHAT.route) { ChatScreen() }
             composable(TopDestination.PROJECTS.route) { BuildWorkspace() }
             composable(TopDestination.ENGINE.route) { EngineScreen() }
-            composable(TopDestination.NETWORK.route) { Placeholder("Network", "P2P mesh lands in Phase 6.") }
+            composable(TopDestination.NETWORK.route) { NetworkScreen() }
             composable(TopDestination.SETTINGS.route) { SettingsScreen() }
         }
     }

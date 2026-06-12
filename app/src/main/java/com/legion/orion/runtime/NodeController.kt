@@ -8,9 +8,11 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -49,7 +51,9 @@ class NodeController @Inject constructor(
     /** Extracts assets, launches the :node service, and waits for the host to report healthy. */
     suspend fun ensureStarted(): Boolean = startMutex.withLock {
         if (started && health()) return@withLock true
-        AssetExtractor.extractOnce(context, "node", nodeDir, version = ASSET_VERSION)
+        withContext(Dispatchers.IO) {
+            AssetExtractor.extractOnce(context, "node", nodeDir, version = ASSET_VERSION)
+        }
         val hostScript = File(nodeDir, "orion-host.js").absolutePath
         val npmCli = File(nodeDir, "npm/bin/npm-cli.js").absolutePath
         NodeRuntimeService.start(context, hostScript, arrayListOf(CONTROL_PORT.toString(), npmCli))
@@ -59,7 +63,7 @@ class NodeController @Inject constructor(
             if (health()) { started = true; return@withLock true }
             delay(500)
         }
-        Log.w(TAG, "Node host did not become healthy in time")
+        Log.w(TAG, "Node host did not become healthy in time (last error: ${lastHealthError?.toString()})")
         false
     }
 
@@ -68,9 +72,14 @@ class NodeController @Inject constructor(
         started = false
     }
 
-    fun health(): Boolean = runCatching {
-        client.newCall(Request.Builder().url("$base/health").build()).execute().use { it.isSuccessful }
-    }.getOrDefault(false)
+    @Volatile private var lastHealthError: Throwable? = null
+
+    /** Main-safe: callers may be on the UI dispatcher (e.g. the Network toggle). */
+    suspend fun health(): Boolean = withContext(Dispatchers.IO) {
+        runCatching {
+            client.newCall(Request.Builder().url("$base/health").build()).execute().use { it.isSuccessful }
+        }.onFailure { lastHealthError = it }.getOrDefault(false)
+    }
 
     /** Runs `npm ...` or `node -e ...` in the host process. Returns (exitCode, combinedOutput). */
     suspend fun exec(argv: List<String>, cwd: String): Pair<Int, String> {
@@ -95,12 +104,12 @@ class NodeController @Inject constructor(
         post("/devserver/stop", buildJsonObject { put("port", port) })
     }
 
-    private fun post(path: String, body: JsonObject): JsonObject {
+    private suspend fun post(path: String, body: JsonObject): JsonObject = withContext(Dispatchers.IO) {
         val req = Request.Builder()
             .url("$base$path")
             .post(body.toString().toRequestBody(JSON_MEDIA))
             .build()
-        return client.newCall(req).execute().use { resp ->
+        client.newCall(req).execute().use { resp ->
             val text = resp.body?.string().orEmpty()
             runCatching { json.parseToJsonElement(text) as JsonObject }.getOrElse { JsonObject(emptyMap()) }
         }
@@ -109,7 +118,7 @@ class NodeController @Inject constructor(
     companion object {
         private const val TAG = "NodeController"
         const val CONTROL_PORT = 8137
-        private const val ASSET_VERSION = "node18-npm1082-babel724-v2"
+        private const val ASSET_VERSION = "node18-npm1082-babel724-p2p-v4"
         private val JSON_MEDIA = "application/json".toMediaType()
     }
 }
