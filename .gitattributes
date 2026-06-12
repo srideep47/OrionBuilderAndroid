@@ -1,0 +1,2 @@
+app/src/main/assets/toolchain/*.tar.xz filter=lfs diff=lfs merge=lfs -text
+runtime/node/src/main/jniLibs/**/*.so filter=lfs diff=lfs merge=lfs -text

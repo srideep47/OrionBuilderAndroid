@@ -1,0 +1,31 @@
+.gradle/
+.kotlin/
+/build/
+/app/build/
+/core/*/build/
+/engine/*/build/
+/infra/*/build/
+/runtime/*/build/
+local.properties
+.idea/
+.cxx/
+*.iml
+captures/
+.externalNativeBuild/
+
+# Local generated/runtime caches
+.nodejs-mobile/
+.npmpack/
+.testmodel/
+.toolchain/
+
+# Android Studio and OS noise
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+*.log
+*.tmp
+.DS_Store
+Thumbs.db

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The OpenAI-compatible local HTTP server runs as its own foreground service. -->
+    <application>
+        <service
+            android:name="com.localai.api.openai.service.OpenAIService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+    </application>
+
+</manifest>

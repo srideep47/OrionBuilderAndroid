@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="api_service_channel_name">Local API server</string>
+    <string name="api_service_running">Orion API server running</string>
+    <string name="api_service_running_on">Serving on %1$s:%2$d</string>
+    <string name="api_service_port">Port %1$d</string>
+    <string name="api_service_copy_url">Copy URL</string>
+    <string name="api_service_test_page">Test page</string>
+    <string name="api_service_stop">Stop</string>
+    <string name="api_service_not_started">%1$s — %2$s</string>
+    <string name="no_active_session">No model is loaded</string>
+    <string name="api_service_start_failed">Failed to start API server</string>
+    <string name="api_service_error">API server error: %1$s</string>
+    <string name="api_url_copied">API URL copied</string>
+</resources>

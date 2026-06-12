@@ -1,0 +1,9 @@
+:root { color-scheme: light; }
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  margin: 0;
+  padding: 2rem;
+  background: #ffffff;
+  color: #111111;
+}
+h1 { margin-top: 0; }
