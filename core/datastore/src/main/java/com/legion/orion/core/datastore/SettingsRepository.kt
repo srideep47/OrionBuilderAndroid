@@ -28,6 +28,8 @@ class SettingsRepository @Inject constructor(
         val COMPACTION_THRESHOLD_PERCENT = intPreferencesKey("compaction_threshold_percent")
         val COMPACTION_KEEP_RECENT_TURNS = intPreferencesKey("compaction_keep_recent_turns")
         val COMPACTION_NOTIFY = booleanPreferencesKey("compaction_notify")
+        val MAX_AGENT_ITERATIONS = intPreferencesKey("max_agent_iterations")
+        val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
     }
 
     val lastModelPath: Flow<String?> =
@@ -56,6 +58,12 @@ class SettingsRepository @Inject constructor(
 
     val compactionNotify: Flow<Boolean> =
         context.settingsDataStore.data.map { it[Keys.COMPACTION_NOTIFY] ?: true }
+
+    val maxAgentIterations: Flow<Int> =
+        context.settingsDataStore.data.map { it[Keys.MAX_AGENT_ITERATIONS] ?: 12 }
+
+    val hapticsEnabled: Flow<Boolean> =
+        context.settingsDataStore.data.map { it[Keys.HAPTICS_ENABLED] ?: true }
 
     suspend fun setLastModel(path: String, backend: String) {
         context.settingsDataStore.edit {
@@ -89,5 +97,13 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setCompactionNotify(enabled: Boolean) {
         context.settingsDataStore.edit { it[Keys.COMPACTION_NOTIFY] = enabled }
+    }
+
+    suspend fun setMaxAgentIterations(value: Int) {
+        context.settingsDataStore.edit { it[Keys.MAX_AGENT_ITERATIONS] = value.coerceIn(4, 40) }
+    }
+
+    suspend fun setHapticsEnabled(enabled: Boolean) {
+        context.settingsDataStore.edit { it[Keys.HAPTICS_ENABLED] = enabled }
     }
 }

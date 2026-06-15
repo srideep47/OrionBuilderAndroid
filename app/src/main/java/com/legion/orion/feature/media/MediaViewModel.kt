@@ -85,4 +85,15 @@ class MediaViewModel @Inject constructor(
             publish.publish(mediaPath, PublishMeta(title = title, privacy = "unlisted"))
         }
     }
+
+    /** Schedules a publish for later — WorkManager fires it even after reboot. */
+    fun publishVideoAt(mediaPath: String, title: String, delayMs: Long) {
+        viewModelScope.launch {
+            publish.publish(
+                mediaPath,
+                PublishMeta(title = title, privacy = "unlisted"),
+                scheduledAt = System.currentTimeMillis() + delayMs,
+            )
+        }
+    }
 }

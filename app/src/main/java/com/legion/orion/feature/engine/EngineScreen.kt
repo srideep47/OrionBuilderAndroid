@@ -55,11 +55,12 @@ fun EngineScreen(vm: EngineViewModel = hiltViewModel()) {
     val memoryEstimate = vm.memoryEstimate()
 
     Column(Modifier.fillMaxSize()) {
-        ScreenHeader(eyebrow = "Inference cockpit", title = "Engine", subtitle = "Load, run, and serve on-device models")
-
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 16.dp),
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp, top = 4.dp,
+                bottom = com.legion.orion.core.design.LocalBottomChromeHeight.current + 8.dp,
+            ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { StatusCard(engine, ui) }
@@ -286,6 +287,7 @@ private fun SettingsCard(s: EngineSettings, onChange: (EngineSettings) -> Unit) 
 
             ChipRow("Precision", listOf("low", "normal", "high"), s.precision) { onChange(s.copy(precision = it)) }
             ChipRow("Memory", listOf("low", "normal", "high"), s.memory) { onChange(s.copy(memory = it)) }
+            ChipRow("Power", listOf("low", "normal", "high"), s.power) { onChange(s.copy(power = it)) }
             ChipRow("Sampler", listOf("greedy", "temperature", "mixed"), s.sampler) { onChange(s.copy(sampler = it)) }
             ChipRow(
                 "KV attention compression",

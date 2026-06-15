@@ -45,6 +45,7 @@ data class MnnSettings(
     val threadNum: Int? = null,
     val precision: String? = null,      // low | normal | high
     val memory: String? = null,         // low | normal | high
+    val power: String? = null,          // low | normal | high
     val useMmap: Boolean? = null,
     val useCachedMmap: Boolean? = null,
     val kvCacheMmap: Boolean? = null,
@@ -170,7 +171,7 @@ class OrionMnnEngine {
     private fun writeOverrideConfig(modelId: String, s: MnnSettings) {
         runCatching {
             val all = listOf(
-                s.threadNum, s.precision, s.memory, s.useMmap, s.maxNewTokens, s.temperature,
+                s.threadNum, s.precision, s.memory, s.power, s.useMmap, s.maxNewTokens, s.temperature,
                 s.topP, s.topK, s.minP, s.tfsZ, s.typical, s.penalty, s.nGram, s.nGramFactor,
                 s.samplerType, s.systemPrompt, s.enableThinking, s.useCachedMmap, s.kvCacheMmap,
                 s.reuseKv, s.attentionMode, s.dynamicOption, s.maxAllTokens,
@@ -191,6 +192,7 @@ class OrionMnnEngine {
                 useCachedMmap = s.useCachedMmap, kvCacheMmap = s.kvCacheMmap, tmpPath = kvTmp,
                 reuseKv = s.reuseKv, attentionMode = s.attentionMode, quantQkv = s.attentionMode,
                 dynamicOption = s.dynamicOption, maxAllTokens = s.maxAllTokens, memory = s.memory,
+                power = s.power,
                 systemPrompt = s.systemPrompt,
                 samplerType = s.samplerType,
                 mixedSamplers = if (s.samplerType == "mixed") mutableListOf("topK", "topP", "minP", "temperature") else null,

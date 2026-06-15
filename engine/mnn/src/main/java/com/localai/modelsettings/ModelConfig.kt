@@ -38,6 +38,7 @@ data class ModelConfig(
     @SerializedName("dynamic_option") var dynamicOption: Int?,
     @SerializedName("max_all_tokens") var maxAllTokens: Int?,
     @SerializedName("memory") var memory: String?,
+    @SerializedName("power") var power: String?,
     @SerializedName("system_prompt") var systemPrompt: String?,
     @SerializedName("sampler_type") var samplerType: String?,
     @SerializedName("mixed_samplers") var mixedSamplers: MutableList<String>?,
@@ -198,7 +199,10 @@ data class ModelConfig(
             quantQkv = 8,
             dynamicOption = 0,
             maxAllTokens = 2048,
-            memory = "",
+            // GPTee tuned profile: low-memory layout + high power mode give the best
+            // sustained tok/s on Snapdragon-class SoCs (see GPTee mmap_config.json).
+            memory = "low",
+            power = "high",
             systemPrompt = "You are a helpful assistant.",
             samplerType = "",
             mixedSamplers = mutableListOf("topK", "topP", "minP", "temperature"),

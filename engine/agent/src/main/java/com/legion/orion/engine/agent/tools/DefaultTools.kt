@@ -13,6 +13,10 @@ object DefaultTools {
         SearchReplaceTool(),
         GrepTool(),
         RepoMapTool(),
+        ReadManyFilesTool(),
+        AppendFileTool(),
+        MakeDirectoryTool(),
+        MoveFileTool(),
     )
 
     fun registry(): ToolRegistry = ToolRegistry(list())

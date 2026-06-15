@@ -124,6 +124,34 @@ class PreviewController @Inject constructor() {
         }
     }
 
+    /** Runs arbitrary JS in the preview and returns its (string) result, unwrapped. */
+    suspend fun eval(js: String): String? = withContext(Dispatchers.Main) {
+        val wv = webViewRef?.get() ?: return@withContext null
+        suspendCancellableCoroutine { cont ->
+            runCatching {
+                wv.evaluateJavascript(js) { result -> cont.resume(decodeJsResult(result)) }
+            }.onFailure { cont.resume(null) }
+        }
+    }
+
+    /**
+     * Reports whether the rendered page is actually styled — the signal the QA gate
+     * can't get from console/network alone (a stylesheet served with the wrong MIME,
+     * a wrong href, or a missing <link> all yield a silently unstyled page). Returns
+     * a compact JSON string.
+     */
+    suspend fun renderReport(): String? = eval(RENDER_REPORT_JS)
+
+    /** Unwraps a value returned by WebView.evaluateJavascript (JSON-encoded). */
+    private fun decodeJsResult(result: String?): String? {
+        if (result == null || result == "null") return null
+        return if (result.length >= 2 && result.startsWith("\"") && result.endsWith("\"")) {
+            result.substring(1, result.length - 1)
+                .replace("\\\"", "\"").replace("\\n", "\n").replace("\\t", "\t")
+                .replace("\\\\", "\\")
+        } else result
+    }
+
     val isAttached: Boolean get() = webViewRef?.get() != null
 
     data class Diagnostics(val consoleErrors: List<String>, val failedRequests: List<String>)
@@ -151,6 +179,39 @@ class PreviewController @Inject constructor() {
             out.push(role + ': ' + label(el));
           });
           return out.slice(0,200).join('\n');
+        })();
+        """
+
+        // Render-health probe: stylesheet load state + computed body styles, so the
+        // agent can tell a styled page from a silently-unstyled one.
+        const val RENDER_REPORT_JS = """
+        (function(){
+          try {
+            var sheets = Array.prototype.slice.call(document.styleSheets || []);
+            var ruleCount = 0;
+            sheets.forEach(function(s){ try { ruleCount += (s.cssRules ? s.cssRules.length : 0); } catch(e){} });
+            var links = Array.prototype.slice.call(document.querySelectorAll('link[rel~="stylesheet"]')).map(function(l){
+              return { href: l.getAttribute('href'), loaded: !!l.sheet, rules: (l.sheet && l.sheet.cssRules ? l.sheet.cssRules.length : 0) };
+            });
+            var styleTags = document.querySelectorAll('style').length;
+            var body = document.body;
+            var cs = body ? getComputedStyle(body) : null;
+            var r = {
+              title: document.title,
+              url: location.href,
+              elements: document.getElementsByTagName('*').length,
+              styleSheets: sheets.length,
+              styleTags: styleTags,
+              cssRules: ruleCount,
+              links: links,
+              bodyBackground: cs ? cs.backgroundColor : null,
+              bodyColor: cs ? cs.color : null,
+              bodyFontFamily: cs ? cs.fontFamily : null,
+              hasStyles: ruleCount > 0,
+              textSample: (body && body.innerText ? body.innerText.trim().slice(0,160) : '')
+            };
+            return JSON.stringify(r);
+          } catch(e) { return JSON.stringify({ error: String(e) }); }
         })();
         """
     }

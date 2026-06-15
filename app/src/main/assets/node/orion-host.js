@@ -298,7 +298,16 @@ function makeHandler(root) {
       }
       if (ext === '.css') {
         const css = fs.readFileSync(target, 'utf8');
-        if (u.searchParams.has('raw')) send(res, 200, 'text/css', css);
+        // A real <link rel="stylesheet"> fetch wants text/css; a JS `import './x.css'`
+        // wants the Vite-style injector module. The browser tells us which via
+        // Sec-Fetch-Dest ('style' for <link>) / Accept (text/css for <link>).
+        const dest = req.headers['sec-fetch-dest'];
+        const accept = req.headers.accept || '';
+        const wantsStylesheet =
+          u.searchParams.has('raw') ||
+          dest === 'style' ||
+          (accept.includes('text/css') && dest !== 'script' && dest !== 'worker');
+        if (wantsStylesheet) send(res, 200, 'text/css', css);
         else send(res, 200, 'text/javascript', cssModule(css, rel));  // imported from JS → injector
         return;
       }

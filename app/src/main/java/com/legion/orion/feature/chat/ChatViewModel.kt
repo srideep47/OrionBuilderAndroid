@@ -76,6 +76,9 @@ data class ChatUiState(
     val liveTokens: Int = 0,
     val liveTokensPerSecond: Double = 0.0,
     val contentTab: CommandContentTab = CommandContentTab.CHAT,
+    val contextUsedTokens: Int = 0,
+    val contextWindowTokens: Int = 32_768,
+    val modelSheetModels: List<String> = emptyList(),
 )
 
 enum class CommandContentTab { CHAT, PREVIEW, CODE }
@@ -214,6 +217,7 @@ class ChatViewModel @Inject constructor(
                 is ResolveResult.Ready -> r.provider
             }
 
+            refreshContextUsage(provider)
             if (state.mode == ChatMode.BUILD) runAgent(chatId, provider, resolved)
             else runChat(chatId, provider, resolved)
         }
@@ -294,7 +298,11 @@ class ChatViewModel @Inject constructor(
         chatRepo.finishAssistantMessage(chatId, assistantId, textBuf.toString(), thinkBuf.toString(), status)
         if (textBuf.isNotEmpty()) conversation.add(ChatMessage(ChatMessage.Role.ASSISTANT, textBuf.toString()))
         streamingFlow.value = null
-        _ui.value = _ui.value.copy(busy = false, error = errorMsg)
+        _ui.value = _ui.value.copy(
+            busy = false,
+            error = errorMsg,
+            contextUsedTokens = estimateTokens(conversation),
+        )
     }
 
     // ── Agentic build (tools) ──
@@ -309,11 +317,16 @@ class ChatViewModel @Inject constructor(
         _ui.value = _ui.value.copy(projectName = projects.observeProjects().first().firstOrNull { it.id == pid }?.name)
         val dir = projects.dirFor(pid)
         val window = providerRepo.modelsFor(providerEntity.id).firstOrNull()?.contextWindow ?: 32_768
+        val maxIterations = settings.maxAgentIterations.first()
         val loop = AgentLoop(
             provider = provider,
             registry = registry,
             snapshotter = GitSnapshotter(dir),
-            config = AgentConfig(model = _ui.value.selectedModel, contextWindowTokens = window),
+            config = AgentConfig(
+                model = _ui.value.selectedModel,
+                contextWindowTokens = window,
+                maxIterations = maxIterations,
+            ),
             projectDir = dir,
             systemPrompt = SystemPrompts.full(),
         )
@@ -404,6 +417,31 @@ class ChatViewModel @Inject constructor(
     }
 
     fun stop() { streamJob?.cancel() }
+
+    /** Re-runs the last user turn as a fresh request (new messages appended). */
+    fun retryLast() {
+        if (_ui.value.busy) return
+        val lastUser = conversation.lastOrNull { it.role == ChatMessage.Role.USER } ?: return
+        _ui.value = _ui.value.copy(input = lastUser.content)
+        send()
+    }
+
+    /** Loads the model list for a provider so the model sheet can show choices. */
+    fun loadModelsFor(provider: ProviderEntity) {
+        viewModelScope.launch {
+            val models = if (provider.type == ProviderType.PEER) listOf("remote-peer")
+            else providerRepo.modelsFor(provider.id).map { it.modelId }
+            _ui.value = _ui.value.copy(modelSheetModels = models)
+        }
+    }
+
+    private suspend fun refreshContextUsage(providerEntity: ProviderEntity) {
+        val window = providerRepo.modelsFor(providerEntity.id).firstOrNull()?.contextWindow ?: 32_768
+        _ui.value = _ui.value.copy(
+            contextUsedTokens = estimateTokens(conversation),
+            contextWindowTokens = window,
+        )
+    }
 
     fun newChat() {
         streamJob?.cancel()

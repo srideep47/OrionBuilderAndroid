@@ -28,6 +28,8 @@ data class SettingsUiState(
     val compactionThresholdPercent: Int = 75,
     val compactionKeepRecentTurns: Int = 6,
     val compactionNotify: Boolean = true,
+    val maxAgentIterations: Int = 12,
+    val hapticsEnabled: Boolean = true,
 )
 
 @HiltViewModel
@@ -56,6 +58,12 @@ class SettingsViewModel @Inject constructor(
                 compactionKeepRecentTurns = keepRecent,
                 compactionNotify = notify,
             )
+        }.onEach { _ui.value = it }.launchIn(viewModelScope)
+        combine(
+            settings.maxAgentIterations,
+            settings.hapticsEnabled,
+        ) { maxIter, haptics ->
+            _ui.value.copy(maxAgentIterations = maxIter, hapticsEnabled = haptics)
         }.onEach { _ui.value = it }.launchIn(viewModelScope)
     }
 
@@ -97,5 +105,13 @@ class SettingsViewModel @Inject constructor(
 
     fun setCompactionNotify(enabled: Boolean) {
         viewModelScope.launch { settings.setCompactionNotify(enabled) }
+    }
+
+    fun setMaxAgentIterations(value: Int) {
+        viewModelScope.launch { settings.setMaxAgentIterations(value) }
+    }
+
+    fun setHapticsEnabled(enabled: Boolean) {
+        viewModelScope.launch { settings.setHapticsEnabled(enabled) }
     }
 }

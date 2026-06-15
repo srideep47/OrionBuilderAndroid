@@ -26,6 +26,7 @@ data class EngineSettings(
     val threadNum: Int = 4,
     val precision: String = "low",       // low | normal | high
     val memory: String = "low",          // low | normal | high
+    val power: String = "high",          // low | normal | high — GPTee tuned default
     val useMmap: Boolean = false,
     val useCachedMmap: Boolean = true,
     val kvCacheMmap: Boolean = false,
@@ -155,6 +156,7 @@ class EngineViewModel @Inject constructor(
         threadNum = threadNum,
         precision = precision,
         memory = memory,
+        power = power,
         useMmap = useMmap,
         useCachedMmap = useCachedMmap,
         kvCacheMmap = kvCacheMmap,

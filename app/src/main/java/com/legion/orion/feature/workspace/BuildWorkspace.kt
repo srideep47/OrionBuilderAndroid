@@ -1,79 +1,80 @@
 package com.legion.orion.feature.workspace
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.legion.orion.core.design.BadgeTone
 import com.legion.orion.core.design.Cosmos
 import com.legion.orion.core.design.CosmosBadge
-import com.legion.orion.core.design.GhostButton
-import com.legion.orion.core.design.GlassCard
+import com.legion.orion.core.design.LiquidChip
+import com.legion.orion.core.design.LiquidPanel
+import com.legion.orion.core.design.LiquidSegmented
+import com.legion.orion.core.design.LocalBottomChromeHeight
 import com.legion.orion.core.design.MonoFamily
-import com.legion.orion.core.design.ScreenHeader
-import com.legion.orion.core.design.glass
 import com.legion.orion.feature.editor.EditorScreen
 import com.legion.orion.feature.preview.PreviewScreen
 
-/** Companion workspace for the unified Chat command surface: code, preview, security, and tools. */
+/** Build workspace: editor, preview, safety report, and build-tool monitoring. */
 @Composable
 fun BuildWorkspace(vm: WorkspaceViewModel = hiltViewModel()) {
-    var tab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Editor", "Preview", "Security", "Tools")
+    var tab by rememberSaveable { mutableIntStateOf(0) }
     val projects by vm.projects.collectAsStateWithLifecycle()
     val buildJobs by vm.buildJobs.collectAsStateWithLifecycle()
     val server by vm.devServer.collectAsStateWithLifecycle()
     val diagnostics by vm.diagnostics.collectAsStateWithLifecycle()
 
     Column(Modifier.fillMaxSize()) {
-        ScreenHeader(
-            eyebrow = "Workspace companion",
-            title = "Build",
-            subtitle = "Inspect code, preview output, review safety, and monitor build tools",
-        )
-
         Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            Modifier
+                .fillMaxWidth()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            tabs.forEachIndexed { i, label ->
-                Box(
-                    Modifier
-                        .glass(
-                            RoundedCornerShape(12.dp),
-                            fill = if (tab == i) Color(0x33A88CFF) else Cosmos.GlassFill,
-                            border = if (tab == i) Color(0x66A88CFF) else Cosmos.Hairline,
-                        )
-                        .clickable { tab = i }
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                ) {
-                    Text(label, color = if (tab == i) Cosmos.Violet3 else Cosmos.TextMuted, style = MaterialTheme.typography.labelLarge)
-                }
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Build",
+                    style = MaterialTheme.typography.titleLarge.copy(brush = Cosmos.TitleGradient),
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "Code, preview, safety, and build tools",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
             }
         }
+
+        LiquidSegmented(
+            options = listOf("Editor", "Preview", "Safety", "Tools"),
+            selectedIndex = tab,
+            onSelect = { tab = it },
+            modifier = Modifier
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 6.dp),
+        )
 
         when (tab) {
             0 -> EditorScreen()
@@ -97,14 +98,22 @@ private fun SecurityPanel(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(
+            start = 16.dp, end = 16.dp, top = 4.dp,
+            bottom = LocalBottomChromeHeight.current + 8.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            GlassCard {
+            LiquidPanel(modifier = Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Preview QA", style = MaterialTheme.typography.titleMedium, color = Cosmos.Text, modifier = Modifier.weight(1f))
+                        Text(
+                            "Preview QA",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = Cosmos.Text,
+                            modifier = Modifier.weight(1f),
+                        )
                         val ok = diagnostics.consoleErrors.isEmpty() && diagnostics.failedRequests.isEmpty()
                         CosmosBadge(if (ok) "Clean" else "Needs review", if (ok) BadgeTone.Green else BadgeTone.Amber)
                     }
@@ -114,8 +123,8 @@ private fun SecurityPanel(
                         color = Cosmos.TextMuted,
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        GhostButton("Refresh", onClick = onRefresh)
-                        GhostButton("Clear", onClick = onClear)
+                        LiquidChip("Refresh", onClick = onRefresh)
+                        LiquidChip("Clear", onClick = onClear)
                     }
                 }
             }
@@ -128,7 +137,7 @@ private fun SecurityPanel(
 
 @Composable
 private fun SecurityChecklist() {
-    GlassCard {
+    LiquidPanel(modifier = Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Agent safety rails", style = MaterialTheme.typography.titleMedium, color = Cosmos.Text)
             listOf(
@@ -149,7 +158,7 @@ private fun SecurityChecklist() {
 
 @Composable
 private fun DiagnosticList(title: String, entries: List<String>) {
-    GlassCard {
+    LiquidPanel(modifier = Modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium, color = Cosmos.Text)
             if (entries.isEmpty()) {
@@ -172,14 +181,17 @@ private fun ToolsPanel(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(
+            start = 16.dp, end = 16.dp, top = 4.dp,
+            bottom = LocalBottomChromeHeight.current + 8.dp,
+        ),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item {
-            GlassCard {
+            LiquidPanel(modifier = Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Command tools", style = MaterialTheme.typography.titleMedium, color = Cosmos.Text)
-                    ToolRow("Unified chat", "Use Chat -> Build for create_project, edit files, start_dev_server, build_apk, and queue_media_job.")
+                    ToolRow("Unified chat", "Use Chat → Build for create_project, edit files, start_dev_server, build_apk, and queue_media_job.")
                     ToolRow("Preview", serverUrl ?: "No dev server running.")
                     ToolRow("Projects", "$projectCount project(s) available to the editor and agent.")
                     ToolRow("QA status", "${diagnostics.consoleErrors.size} console error(s), ${diagnostics.failedRequests.size} failed request(s).")
@@ -187,7 +199,7 @@ private fun ToolsPanel(
             }
         }
         item {
-            GlassCard {
+            LiquidPanel(modifier = Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Build jobs", style = MaterialTheme.typography.titleMedium, color = Cosmos.Text)
                     if (buildJobs.isEmpty()) {
@@ -197,19 +209,32 @@ private fun ToolsPanel(
             }
         }
         items(buildJobs, key = { it.id }) { job ->
-            GlassCard {
+            LiquidPanel(modifier = Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(job.target.uppercase(), color = Cosmos.Violet3, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
-                        CosmosBadge(job.state, when (job.state) {
-                            "done" -> BadgeTone.Green
-                            "failed" -> BadgeTone.Red
-                            "running" -> BadgeTone.Violet
-                            else -> BadgeTone.Amber
-                        })
+                        Text(
+                            job.target.uppercase(),
+                            color = Cosmos.Violet3,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                        CosmosBadge(
+                            job.state,
+                            when (job.state) {
+                                "done" -> BadgeTone.Green
+                                "failed" -> BadgeTone.Red
+                                "running" -> BadgeTone.Violet
+                                else -> BadgeTone.Amber
+                            },
+                        )
                     }
                     job.logTail?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFamily), color = Cosmos.TextMuted, maxLines = 8)
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFamily),
+                            color = Cosmos.TextMuted,
+                            maxLines = 8,
+                        )
                     }
                     job.artifactPath?.let {
                         Text(it, style = MaterialTheme.typography.labelSmall, color = Cosmos.Green)

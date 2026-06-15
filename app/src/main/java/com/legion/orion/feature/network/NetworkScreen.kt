@@ -1,49 +1,50 @@
 package com.legion.orion.feature.network
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ElevatedCard
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.legion.orion.core.design.BadgeTone
+import com.legion.orion.core.design.Cosmos
+import com.legion.orion.core.design.CosmosBadge
+import com.legion.orion.core.design.LiquidButton
+import com.legion.orion.core.design.LiquidButtonStyle
+import com.legion.orion.core.design.LiquidPanel
+import com.legion.orion.core.design.LocalBottomChromeHeight
+import com.legion.orion.core.design.MonoFamily
 import com.legion.orion.infra.p2p.FriendRequest
 import com.legion.orion.infra.p2p.P2pPeer
 
+/** Peers pane — P2P discovery, identity, and the friends/trust flow. */
 @Composable
 fun NetworkScreen(viewModel: NetworkViewModel = hiltViewModel()) {
     val online by viewModel.online.collectAsStateWithLifecycle()
@@ -61,26 +62,32 @@ fun NetworkScreen(viewModel: NetworkViewModel = hiltViewModel()) {
 
     Box(Modifier.fillMaxSize()) {
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(horizontal = 16.dp),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp, top = 4.dp,
+                bottom = LocalBottomChromeHeight.current + 8.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             item {
-                com.legion.orion.core.design.GradientTitle("Hub", Modifier.padding(top = 16.dp, bottom = 4.dp))
-            }
-            item {
-                HeaderCard(online = online, busy = busy, selfKey = selfKey, trustedCount = trusted.size, mode = mode) {
-                    viewModel.toggleOnline(it)
-                }
+                HeaderCard(
+                    online = online,
+                    busy = busy,
+                    selfKey = selfKey,
+                    trustedCount = trusted.size,
+                    mode = mode,
+                    onToggle = viewModel::toggleOnline,
+                )
             }
 
             if (pending.isNotEmpty()) {
                 item { SectionLabel("Friend requests") }
                 items(pending, key = { it.fromPublicKey }) { req ->
-                    FriendRequestCard(req, onAccept = { viewModel.acceptFriend(req) }, onDismiss = { viewModel.dismissRequest(req) })
+                    FriendRequestCard(
+                        req,
+                        onAccept = { viewModel.acceptFriend(req) },
+                        onDismiss = { viewModel.dismissRequest(req) },
+                    )
                 }
             }
 
@@ -95,7 +102,7 @@ fun NetworkScreen(viewModel: NetworkViewModel = hiltViewModel()) {
                             else -> "Searching for peers on your network and the DHT…"
                         },
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = Cosmos.TextMuted,
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
                 }
@@ -112,10 +119,10 @@ fun NetworkScreen(viewModel: NetworkViewModel = hiltViewModel()) {
 @Composable
 private fun SectionLabel(text: String) {
     Text(
-        text,
-        style = MaterialTheme.typography.titleSmall,
-        color = MaterialTheme.colorScheme.primary,
-        modifier = Modifier.padding(top = 8.dp),
+        text.uppercase(),
+        style = MaterialTheme.typography.labelSmall,
+        color = Cosmos.TextMuted,
+        modifier = Modifier.padding(start = 4.dp, top = 6.dp),
     )
 }
 
@@ -128,44 +135,46 @@ private fun HeaderCard(
     mode: String,
     onToggle: (Boolean) -> Unit,
 ) {
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
+    LiquidPanel(modifier = Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Orion network", style = MaterialTheme.typography.titleMedium)
-                        if (online && mode == "lan") {
-                            Spacer(Modifier.width(8.dp))
-                            Badge("LAN-only")
-                        }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Orion network", style = MaterialTheme.typography.titleMedium, color = Cosmos.Text)
+                        if (online && mode == "lan") CosmosBadge("LAN", BadgeTone.Blue)
+                        if (online && mode != "lan") CosmosBadge("DHT", BadgeTone.Green)
                     }
                     Text(
                         if (online) "Online · sharing & using compute" else "Offline",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = Cosmos.TextMuted,
                     )
                 }
                 if (busy) {
-                    CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                    CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp, color = Cosmos.Violet)
                     Spacer(Modifier.width(12.dp))
                 }
-                Switch(checked = online, onCheckedChange = onToggle, enabled = !busy)
+                Switch(
+                    checked = online,
+                    onCheckedChange = onToggle,
+                    enabled = !busy,
+                    colors = SwitchDefaults.colors(checkedTrackColor = Cosmos.Violet2, checkedThumbColor = Color.White),
+                )
             }
             if (selfKey.isNotBlank()) {
-                Spacer(Modifier.size(12.dp))
-                HorizontalDivider()
-                Spacer(Modifier.size(12.dp))
-                Text("Your identity", style = MaterialTheme.typography.labelMedium)
-                Text(
-                    fingerprint(selfKey),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = FontFamily.Monospace,
-                )
-                Text(
-                    "$trustedCount trusted ${if (trustedCount == 1) "friend" else "friends"}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("Your identity", style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted)
+                    Text(
+                        fingerprint(selfKey),
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFamily),
+                        color = Cosmos.Violet3,
+                    )
+                    Text(
+                        "$trustedCount trusted ${if (trustedCount == 1) "friend" else "friends"}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Cosmos.TextMuted,
+                    )
+                }
             }
         }
     }
@@ -173,22 +182,22 @@ private fun HeaderCard(
 
 @Composable
 private fun FriendRequestCard(req: FriendRequest, onAccept: () -> Unit, onDismiss: () -> Unit) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-        Column(Modifier.padding(16.dp)) {
+    LiquidPanel(modifier = Modifier.fillMaxWidth(), tint = Cosmos.Violet) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
                 req.fromDisplayName.ifBlank { "Unknown peer" },
                 style = MaterialTheme.typography.titleSmall,
+                color = Cosmos.Text,
             )
             Text(
                 "${req.fromDeviceName.ifBlank { "device" }} · ${fingerprint(req.fromPublicKey)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFamily),
+                color = Cosmos.TextMuted,
             )
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onDismiss) { Text("Dismiss") }
-                Spacer(Modifier.width(8.dp))
-                OutlinedButton(onClick = onAccept) { Text("Accept") }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Spacer(Modifier.weight(1f))
+                LiquidButton("Dismiss", onClick = onDismiss, style = LiquidButtonStyle.Glass, compact = true)
+                LiquidButton("Accept", onClick = onAccept, compact = true)
             }
         }
     }
@@ -196,55 +205,55 @@ private fun FriendRequestCard(req: FriendRequest, onAccept: () -> Unit, onDismis
 
 @Composable
 private fun PeerCard(peer: P2pPeer, onAddFriend: () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
+    LiquidPanel(modifier = Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(online = peer.status == "online")
+                Box(
+                    Modifier
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(if (peer.status == "online") Cosmos.Green else Cosmos.TextFaint),
+                )
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(peer.displayName.ifBlank { "Unknown" }, style = MaterialTheme.typography.titleSmall)
+                    Text(peer.displayName.ifBlank { "Unknown" }, style = MaterialTheme.typography.titleSmall, color = Cosmos.Text)
                     Text(
                         fingerprint(peer.publicKey),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFamily),
+                        color = Cosmos.TextMuted,
                     )
                 }
-                if (peer.latencyMs != null) {
-                    Text("${peer.latencyMs} ms", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                peer.latencyMs?.let {
+                    Text(
+                        "$it ms",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+                        color = if (it < 50) Cosmos.Green else if (it < 150) Cosmos.Amber else Cosmos.Red,
+                    )
                 }
             }
-            Row(Modifier.fillMaxWidth().padding(top = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Badge(peer.deviceType)
-                if (peer.isLan) Badge("LAN")
-                if (peer.isTrusted) Badge("Friend")
-                if (peer.computeAvailable) Badge("Compute")
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CosmosBadge(peer.deviceType, BadgeTone.Neutral)
+                if (peer.isLan) CosmosBadge("LAN", BadgeTone.Blue)
+                if (peer.isTrusted) CosmosBadge("Friend", BadgeTone.Violet)
+                if (peer.computeAvailable) CosmosBadge("Compute", BadgeTone.Green)
                 Spacer(Modifier.weight(1f))
                 if (!peer.isTrusted) {
-                    OutlinedButton(onClick = onAddFriend) { Text("Add friend") }
+                    LiquidButton("Add friend", onClick = onAddFriend, style = LiquidButtonStyle.Glass, compact = true)
                 }
             }
             if (peer.loadedModels.isNotEmpty()) {
                 Text(
                     "Models: ${peer.loadedModels.joinToString(", ")}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp),
+                    color = Cosmos.TextMuted,
                 )
             }
         }
     }
-}
-
-@Composable
-private fun Badge(text: String) {
-    AssistChip(onClick = {}, enabled = false, label = { Text(text) })
-}
-
-@Composable
-private fun StatusDot(online: Boolean) {
-    val color = if (online) Color(0xFF34C759) else MaterialTheme.colorScheme.outline
-    Surface(color = color, shape = CircleShape, modifier = Modifier.size(10.dp)) {}
 }
 
 private fun fingerprint(publicKey: String): String =

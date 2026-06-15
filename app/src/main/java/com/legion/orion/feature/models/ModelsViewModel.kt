@@ -126,7 +126,13 @@ class ModelsViewModel @Inject constructor(
             _ui.value = _ui.value.copy(loadingModelId = model.id)
             InferenceService.start(getApplication())
             val backend = MnnBackend.entries.firstOrNull { it.configValue == model.lastUsedBackend } ?: MnnBackend.CPU
-            runCatching { controller.load(model.localPath, backend) }
+            // GPTee tuned profile so quick-loads get full performance, not MNN defaults.
+            val tuned = com.legion.orion.engine.mnn.MnnSettings(
+                memory = "low",
+                power = "high",
+                useCachedMmap = true,
+            )
+            runCatching { controller.load(model.localPath, backend, tuned) }
                 .onSuccess { settings.setLastModel(model.localPath, backend.configValue) }
                 .onFailure { _ui.value = _ui.value.copy(error = it.message) }
             _ui.value = _ui.value.copy(loadingModelId = null)

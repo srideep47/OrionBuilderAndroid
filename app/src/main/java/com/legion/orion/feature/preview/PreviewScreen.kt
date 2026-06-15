@@ -1,6 +1,7 @@
 package com.legion.orion.feature.preview
 
 import android.annotation.SuppressLint
+import androidx.compose.animation.AnimatedVisibility
 import android.webkit.ConsoleMessage
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -10,6 +11,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,28 +26,25 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ArrowForward
-import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Fullscreen
-import androidx.compose.material.icons.filled.FullscreenExit
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.OpenInBrowser
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
+import androidx.compose.material.icons.outlined.Fullscreen
+import androidx.compose.material.icons.outlined.FullscreenExit
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.OpenInBrowser
+import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.RestartAlt
+import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -53,23 +52,35 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.legion.orion.core.design.Cosmos
-import com.legion.orion.core.design.GhostButton
-import com.legion.orion.core.design.GlassCard
-import com.legion.orion.core.design.GlowButton
-import com.legion.orion.core.design.glass
+import com.legion.orion.core.design.Liquid
+import com.legion.orion.core.design.LiquidButton
+import com.legion.orion.core.design.LiquidChip
+import com.legion.orion.core.design.LiquidIconButton
+import com.legion.orion.core.design.LocalBottomChromeHeight
+import com.legion.orion.core.design.MonoFamily
+import com.legion.orion.core.design.liquidGlass
+
+private enum class DeviceMode(val label: String, val width: Int?) {
+    FIT("Fit", null), PHONE("390", 390), TABLET("768", 768)
+}
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -92,6 +103,7 @@ fun PreviewScreen(vm: PreviewViewModel = hiltViewModel()) {
     val controller = vm.previewController
     val rootUrl = server!!.url
     var address by remember(rootUrl) { mutableStateOf(rootUrl) }
+    var device by rememberSaveable { mutableStateOf(DeviceMode.FIT) }
 
     LaunchedEffect(browser.url) {
         if (browser.url.isNotBlank()) address = browser.url
@@ -107,85 +119,128 @@ fun PreviewScreen(vm: PreviewViewModel = hiltViewModel()) {
             .fillMaxSize()
             .background(if (fullscreen) Color.Black else Color.Transparent),
     ) {
-        BrowserToolbar(
-            address = address,
-            browser = browser,
-            busy = busy,
-            fullscreen = fullscreen,
-            onAddress = { address = it },
-            onSubmit = { vm.openPath(address) },
-            onBack = vm::goBack,
-            onForward = vm::goForward,
-            onReload = vm::reload,
-            onHome = { vm.openPath("/") },
-            onRestart = vm::restartPreview,
-            onOpenExternal = { uriHandler.openUri(browser.url.ifBlank { rootUrl }) },
-            onFullscreen = vm::toggleFullscreen,
-            onStop = vm::stopPreview,
-        )
+        if (!fullscreen) {
+            BrowserToolbar(
+                address = address,
+                browser = browser,
+                busy = busy,
+                fullscreen = fullscreen,
+                onAddress = { address = it },
+                onSubmit = { vm.openPath(address) },
+                onBack = vm::goBack,
+                onForward = vm::goForward,
+                onReload = vm::reload,
+                onHome = { vm.openPath("/") },
+                onRestart = vm::restartPreview,
+                onOpenExternal = { uriHandler.openUri(browser.url.ifBlank { rootUrl }) },
+                onFullscreen = vm::toggleFullscreen,
+                onStop = vm::stopPreview,
+            )
+        }
 
-        Row(Modifier.fillMaxSize()) {
-            Box(Modifier.weight(1f).fillMaxHeight()) {
-                AndroidView(
-                    modifier = Modifier.fillMaxSize(),
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.allowFileAccess = true
-                            settings.allowContentAccess = true
-                            settings.mediaPlaybackRequiresUserGesture = false
-                            webChromeClient = object : WebChromeClient() {
-                                override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
-                                    controller.recordConsole(
-                                        msg.messageLevel().name,
-                                        msg.message(),
-                                        msg.sourceId(),
-                                        msg.lineNumber(),
-                                    )
-                                    return true
-                                }
-
-                                override fun onProgressChanged(view: WebView, newProgress: Int) {
-                                    controller.updateBrowserState(view)
-                                }
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            val widthMod = device.width?.let { Modifier.width(it.dp) } ?: Modifier.fillMaxWidth()
+            AndroidView(
+                modifier = widthMod.fillMaxHeight(),
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.allowFileAccess = true
+                        settings.allowContentAccess = true
+                        settings.mediaPlaybackRequiresUserGesture = false
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onConsoleMessage(msg: ConsoleMessage): Boolean {
+                                controller.recordConsole(
+                                    msg.messageLevel().name,
+                                    msg.message(),
+                                    msg.sourceId(),
+                                    msg.lineNumber(),
+                                )
+                                return true
                             }
-                            webViewClient = object : WebViewClient() {
-                                override fun onPageFinished(view: WebView, url: String) {
-                                    controller.updateBrowserState(view)
-                                }
 
-                                override fun onReceivedError(view: WebView, req: WebResourceRequest, err: WebResourceError) {
-                                    controller.recordFailedRequest("${err.errorCode} ${req.url}")
-                                }
-
-                                override fun onReceivedHttpError(view: WebView, req: WebResourceRequest, resp: WebResourceResponse) {
-                                    if (resp.statusCode >= 400) controller.recordFailedRequest("${resp.statusCode} ${req.url}")
-                                }
+                            override fun onProgressChanged(view: WebView, newProgress: Int) {
+                                controller.updateBrowserState(view)
                             }
-                            controller.attach(this)
-                            loadUrl(rootUrl)
                         }
-                    },
-                    update = { controller.updateBrowserState(it) },
-                )
-            }
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageFinished(view: WebView, url: String) {
+                                controller.updateBrowserState(view)
+                            }
 
-            if (!fullscreen) {
-                ToolRail(panel = panel, onSelect = vm::setPanel)
+                            override fun onReceivedError(view: WebView, req: WebResourceRequest, err: WebResourceError) {
+                                controller.recordFailedRequest("${err.errorCode} ${req.url}")
+                            }
+
+                            override fun onReceivedHttpError(view: WebView, req: WebResourceRequest, resp: WebResourceResponse) {
+                                if (resp.statusCode >= 400) controller.recordFailedRequest("${resp.statusCode} ${req.url}")
+                            }
+                        }
+                        controller.attach(this)
+                        loadUrl(rootUrl)
+                    }
+                },
+                update = { controller.updateBrowserState(it) },
+            )
+
+            if (fullscreen) {
+                LiquidIconButton(
+                    Icons.Outlined.FullscreenExit,
+                    "Exit fullscreen",
+                    vm::toggleFullscreen,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(10.dp),
+                    size = 34.dp,
+                )
             }
         }
 
         if (!fullscreen) {
-            BottomPanel(
-                panel = panel,
-                diagnostics = controller.diagnostics(),
-                console = controller.consoleLog(),
-                runtimeLogs = runtimeLogs,
-                a11y = a11y,
-                onClear = vm::clearDiagnostics,
-                onRefreshA11y = vm::refreshAccessibility,
-            )
+            // Bottom dock: panel chips + device modes + (when a drawer panel is
+            // active) the panel content. Padded clear of the floating tab bar so
+            // nothing is obscured, and the WebView above keeps the maximum area.
+            Column(Modifier.padding(bottom = LocalBottomChromeHeight.current)) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    listOf(
+                        PreviewPanel.PREVIEW to "Preview",
+                        PreviewPanel.PROBLEMS to "Problems",
+                        PreviewPanel.LOGS to "Logs",
+                        PreviewPanel.A11Y to "A11y",
+                        PreviewPanel.SECURITY to "Security",
+                        PreviewPanel.PUBLISH to "Publish",
+                    ).forEach { (p, label) ->
+                        LiquidChip(label, selected = panel == p, onClick = { vm.setPanel(p) })
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    DeviceMode.entries.forEach { d ->
+                        LiquidChip(d.label, selected = device == d, onClick = { device = d })
+                    }
+                }
+
+                BottomPanel(
+                    panel = panel,
+                    diagnostics = controller.diagnostics(),
+                    console = controller.consoleLog(),
+                    runtimeLogs = runtimeLogs,
+                    a11y = a11y,
+                    onClear = vm::clearDiagnostics,
+                    onRefreshA11y = vm::refreshAccessibility,
+                )
+            }
         }
     }
 }
@@ -204,9 +259,11 @@ private fun EmptyPreview(busy: Boolean, error: String?, onStart: () -> Unit) {
             color = Cosmos.TextMuted,
             modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
         )
-        GlowButton("Run project preview", onClick = onStart, enabled = !busy)
+        LiquidButton("Run project preview", onClick = onStart, enabled = !busy, icon = Icons.Outlined.PlayArrow)
         if (busy) CircularProgressIndicator(Modifier.padding(top = 14.dp), color = Cosmos.Violet)
-        error?.let { Text(it, color = Cosmos.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 10.dp)) }
+        error?.let {
+            Text(it, color = Cosmos.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 10.dp))
+        }
     }
 }
 
@@ -227,66 +284,70 @@ private fun BrowserToolbar(
     onFullscreen: () -> Unit,
     onStop: () -> Unit,
 ) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)
-            .glass(RoundedCornerShape(14.dp), fill = Color(0x44000000), border = Cosmos.HairlineSoft)
-            .padding(horizontal = 4.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ToolIcon(Icons.Filled.ArrowBack, "Back", enabled = browser.canGoBack, onClick = onBack)
-        ToolIcon(Icons.Filled.ArrowForward, "Forward", enabled = browser.canGoForward, onClick = onForward)
-        ToolIcon(Icons.Filled.Refresh, "Reload", onClick = onReload)
-        ToolIcon(Icons.Filled.Home, "Home", onClick = onHome)
-        OutlinedTextField(
-            value = address,
-            onValueChange = onAddress,
-            singleLine = true,
-            textStyle = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
-            placeholder = { Text("/", maxLines = 1) },
-        )
-        ToolIcon(Icons.Filled.PlayArrow, "Go", onClick = onSubmit)
-        ToolIcon(Icons.Filled.Refresh, "Restart runtime", enabled = !busy, onClick = onRestart)
-        ToolIcon(Icons.Filled.OpenInBrowser, "Open in browser", onClick = onOpenExternal)
-        ToolIcon(if (fullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen, "Fullscreen", onClick = onFullscreen)
-        ToolIcon(Icons.Filled.Stop, "Stop preview", onClick = onStop)
-    }
-}
+    val focusManager = LocalFocusManager.current
+    var editing by remember { mutableStateOf(false) }
 
-@Composable
-private fun ToolRail(panel: PreviewPanel, onSelect: (PreviewPanel) -> Unit) {
-    Column(
-        Modifier.width(72.dp).fillMaxHeight().padding(start = 6.dp, end = 6.dp, bottom = 6.dp)
-            .glass(RoundedCornerShape(16.dp), fill = Color(0x66000000), border = Cosmos.HairlineSoft)
-            .padding(vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        RailItem(Icons.Filled.Visibility, "Preview", panel == PreviewPanel.PREVIEW) { onSelect(PreviewPanel.PREVIEW) }
-        RailItem(Icons.Filled.Warning, "Problems", panel == PreviewPanel.PROBLEMS) { onSelect(PreviewPanel.PROBLEMS) }
-        RailItem(Icons.Filled.Code, "Logs", panel == PreviewPanel.LOGS) { onSelect(PreviewPanel.LOGS) }
-        RailItem(Icons.Filled.BugReport, "A11y", panel == PreviewPanel.A11Y) { onSelect(PreviewPanel.A11Y) }
-        RailItem(Icons.Filled.Security, "Security", panel == PreviewPanel.SECURITY) { onSelect(PreviewPanel.SECURITY) }
-        RailItem(Icons.Filled.OpenInBrowser, "Publish", panel == PreviewPanel.PUBLISH) { onSelect(PreviewPanel.PUBLISH) }
-    }
-}
-
-@Composable
-private fun RailItem(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .glass(
-                RoundedCornerShape(12.dp),
-                fill = if (selected) Color(0x44A88CFF) else Color.Transparent,
-                border = if (selected) Color(0x66A88CFF) else Color.Transparent,
-            )
-            .padding(vertical = 7.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Icon(icon, label, tint = if (selected) Cosmos.Violet3 else Cosmos.TextMuted, modifier = Modifier.size(20.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, color = if (selected) Cosmos.Text else Cosmos.TextMuted, maxLines = 1)
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .liquidGlass(shape = RoundedCornerShape(16.dp), fillTopAlpha = 0.08f)
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            // Leading nav icons collapse away while editing the address so the
+            // field can take the full width and the URL stays readable.
+            AnimatedVisibility(visible = !editing) {
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    ToolIcon(Icons.AutoMirrored.Outlined.ArrowBack, "Back", enabled = browser.canGoBack, onClick = onBack)
+                    ToolIcon(Icons.AutoMirrored.Outlined.ArrowForward, "Forward", enabled = browser.canGoForward, onClick = onForward)
+                    ToolIcon(Icons.Outlined.Refresh, "Reload", onClick = onReload)
+                    ToolIcon(Icons.Outlined.Home, "Home", onClick = onHome)
+                }
+            }
+
+            Row(
+                Modifier
+                    .weight(1f)
+                    .clip(Liquid.ShapePill)
+                    .background(Color(0x4D000000))
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+            ) {
+                BasicTextField(
+                    value = address,
+                    onValueChange = onAddress,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .onFocusChanged { editing = it.isFocused },
+                    textStyle = MaterialTheme.typography.labelMedium.copy(color = Cosmos.TextDim, fontFamily = MonoFamily),
+                    cursorBrush = SolidColor(Cosmos.Violet),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                    keyboardActions = KeyboardActions(onGo = { onSubmit(); focusManager.clearFocus() }),
+                )
+            }
+
+            if (editing) {
+                // While editing: just a Go/Done that submits and dismisses.
+                ToolIcon(Icons.Outlined.PlayArrow, "Go", onClick = { onSubmit(); focusManager.clearFocus() })
+            } else {
+                ToolIcon(Icons.Outlined.PlayArrow, "Go", onClick = onSubmit)
+                ToolIcon(Icons.Outlined.RestartAlt, "Restart runtime", enabled = !busy, onClick = onRestart)
+                ToolIcon(Icons.Outlined.OpenInBrowser, "Open in browser", onClick = onOpenExternal)
+                ToolIcon(
+                    if (fullscreen) Icons.Outlined.FullscreenExit else Icons.Outlined.Fullscreen,
+                    "Fullscreen",
+                    onClick = onFullscreen,
+                )
+                ToolIcon(Icons.Outlined.Stop, "Stop preview", onClick = onStop)
+            }
+        }
     }
 }
 
@@ -301,32 +362,60 @@ private fun BottomPanel(
     onRefreshA11y: () -> Unit,
 ) {
     if (panel == PreviewPanel.PREVIEW) return
-    GlassCard(modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 260.dp).padding(8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    var logFilter by rememberSaveable { mutableStateOf("All") }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 120.dp, max = 260.dp)
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .liquidGlass(shape = RoundedCornerShape(16.dp), fillTopAlpha = 0.07f)
+            .padding(12.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(panelTitle(panel), style = MaterialTheme.typography.titleSmall, color = Cosmos.Text)
             Spacer(Modifier.weight(1f))
-            if (panel == PreviewPanel.A11Y) GhostButton("Refresh", onClick = onRefreshA11y)
-            GhostButton("Clear", onClick = onClear)
-            Icon(Icons.Filled.Clear, null, tint = Cosmos.TextMuted, modifier = Modifier.size(18.dp).clickable(onClick = onClear))
+            if (panel == PreviewPanel.LOGS) {
+                listOf("All", "Error", "Warn").forEach { f ->
+                    LiquidChip(f, selected = logFilter == f, onClick = { logFilter = f })
+                }
+            }
+            if (panel == PreviewPanel.A11Y) {
+                LiquidChip("Refresh", onClick = onRefreshA11y)
+            }
+            LiquidChip("Clear", onClick = onClear)
         }
         LazyColumn(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             when (panel) {
                 PreviewPanel.PROBLEMS -> {
-                    val rows = diagnostics.consoleErrors.map { "Console: $it" } + diagnostics.failedRequests.map { "Request: $it" }
+                    val rows = diagnostics.consoleErrors.map { "Console: $it" } +
+                        diagnostics.failedRequests.map { "Request: $it" }
                     if (rows.isEmpty()) item { MutedLine("No browser problems captured.") }
                     items(rows) { ProblemLine(it) }
                 }
                 PreviewPanel.LOGS -> {
-                    if (console.isEmpty() && runtimeLogs.isBlank()) item { MutedLine("No runtime or console logs yet.") }
-                    if (runtimeLogs.isNotBlank()) item { LogBlock("[Runtime]\n$runtimeLogs") }
-                    items(console.takeLast(80)) { LogBlock("[${it.level}] ${it.message} ${if (it.source.isNotBlank()) "(${it.source}:${it.line})" else ""}") }
+                    val filtered = console.filter {
+                        when (logFilter) {
+                            "Error" -> it.level.contains("ERROR", ignoreCase = true)
+                            "Warn" -> it.level.contains("WARN", ignoreCase = true)
+                            else -> true
+                        }
+                    }
+                    if (filtered.isEmpty() && runtimeLogs.isBlank()) item { MutedLine("No runtime or console logs yet.") }
+                    if (runtimeLogs.isNotBlank() && logFilter == "All") item { LogBlock("[Runtime]\n$runtimeLogs") }
+                    items(filtered.takeLast(80)) {
+                        LogBlock("[${it.level}] ${it.message} ${if (it.source.isNotBlank()) "(${it.source}:${it.line})" else ""}")
+                    }
                 }
                 PreviewPanel.A11Y -> item { LogBlock(a11y ?: "No accessibility snapshot yet.") }
                 PreviewPanel.SECURITY -> item {
-                    MutedLine("Security checks watch browser navigation, failed network requests, and console errors. External publishing keys remain in Android Keystore.")
+                    MutedLine(
+                        "Security checks watch browser navigation, failed network requests, and console errors. " +
+                            "External publishing keys remain in Android Keystore.",
+                    )
                 }
                 PreviewPanel.PUBLISH -> item {
-                    MutedLine("Publishing hooks are available from Media/Settings. Web preview export and share actions can attach here when the project has a build output.")
+                    MutedLine("Publishing hooks live in Hub → Publish. Web preview export and share actions attach here when the project has a build output.")
                 }
                 PreviewPanel.PREVIEW -> Unit
             }
@@ -336,8 +425,19 @@ private fun BottomPanel(
 
 @Composable
 private fun ToolIcon(icon: ImageVector, desc: String, enabled: Boolean = true, onClick: () -> Unit) {
-    IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.size(36.dp)) {
-        Icon(icon, desc, tint = if (enabled) Cosmos.TextDim else Cosmos.TextMuted.copy(alpha = 0.35f), modifier = Modifier.size(19.dp))
+    Box(
+        Modifier
+            .size(34.dp)
+            .clip(Liquid.ShapePill)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            desc,
+            tint = if (enabled) Cosmos.TextDim else Cosmos.TextMuted.copy(alpha = 0.35f),
+            modifier = Modifier.size(18.dp),
+        )
     }
 }
 
@@ -356,7 +456,7 @@ private fun LogBlock(text: String) {
     Text(
         text,
         color = Cosmos.TextDim,
-        style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+        style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFamily),
         maxLines = 80,
         overflow = TextOverflow.Ellipsis,
     )

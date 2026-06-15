@@ -1,39 +1,56 @@
 package com.legion.orion.feature.settings
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.legion.orion.core.design.BadgeTone
+import com.legion.orion.core.design.Cosmos
+import com.legion.orion.core.design.CosmosBadge
+import com.legion.orion.core.design.Liquid
+import com.legion.orion.core.design.LiquidButton
+import com.legion.orion.core.design.LiquidButtonStyle
+import com.legion.orion.core.design.LiquidGroup
+import com.legion.orion.core.design.LiquidRow
+import com.legion.orion.core.design.LocalBottomChromeHeight
+import com.legion.orion.core.design.MonoFamily
+import com.legion.orion.core.design.liquidGlass
 
+/** Settings — providers, agent workflow, context compaction, app behavior. */
 @Composable
 fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
@@ -41,206 +58,262 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.statusBars)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .windowInsetsPadding(WindowInsets.statusBars),
+        contentPadding = PaddingValues(
+            start = 16.dp, end = 16.dp, top = 10.dp,
+            bottom = LocalBottomChromeHeight.current + 8.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(20.dp),
     ) {
         item {
-            com.legion.orion.core.design.GradientTitle("Settings")
+            Column {
+                Text(
+                    "Settings",
+                    style = MaterialTheme.typography.titleLarge.copy(brush = Cosmos.TitleGradient),
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "Providers, agent workflow, and app behavior",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
+            }
         }
-        item { GeneralCard() }
+
+        // ── Agent workflow ──
         item {
-            CompactionCard(
-                enabled = ui.compactionEnabled,
-                threshold = ui.compactionThresholdPercent,
-                keepRecent = ui.compactionKeepRecentTurns,
-                notify = ui.compactionNotify,
-                onEnabled = vm::setCompactionEnabled,
-                onThreshold = vm::setCompactionThresholdPercent,
-                onKeepRecent = vm::setCompactionKeepRecentTurns,
-                onNotify = vm::setCompactionNotify,
-            )
+            LiquidGroup(title = "Agent workflow") {
+                SliderRow(
+                    title = "Max agent steps",
+                    subtitle = "Tool-using turns before the agent stops",
+                    value = ui.maxAgentIterations.toFloat(),
+                    range = 4f..40f,
+                    display = ui.maxAgentIterations.toString(),
+                    onChange = { vm.setMaxAgentIterations(it.toInt()) },
+                )
+                LiquidRow(
+                    title = "Haptic feedback",
+                    subtitle = "Subtle ticks on taps and toggles",
+                    showDivider = false,
+                    trailing = {
+                        LiquidSwitch(ui.hapticsEnabled, vm::setHapticsEnabled)
+                    },
+                )
+            }
         }
+
+        // ── Context compaction ──
         item {
-            com.legion.orion.core.design.Eyebrow("Model Providers", Modifier.padding(top = 4.dp))
-            Text(
-                "API keys are encrypted with the Android Keystore and never stored in plaintext.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp),
-            )
+            LiquidGroup(title = "Context compaction") {
+                LiquidRow(
+                    title = "Auto-compact long chats",
+                    subtitle = "Summarize old turns near the context limit",
+                    trailing = { LiquidSwitch(ui.compactionEnabled, vm::setCompactionEnabled) },
+                )
+                SliderRow(
+                    title = "Trigger threshold",
+                    subtitle = "Compact when context passes this fill level",
+                    value = ui.compactionThresholdPercent.toFloat(),
+                    range = 50f..95f,
+                    display = "${ui.compactionThresholdPercent}%",
+                    onChange = { vm.setCompactionThresholdPercent(it.toInt()) },
+                )
+                SliderRow(
+                    title = "Keep recent turns",
+                    subtitle = "Turns kept verbatim after compaction",
+                    value = ui.compactionKeepRecentTurns.toFloat(),
+                    range = 2f..20f,
+                    display = ui.compactionKeepRecentTurns.toString(),
+                    onChange = { vm.setCompactionKeepRecentTurns(it.toInt()) },
+                )
+                LiquidRow(
+                    title = "Notify on compaction",
+                    showDivider = false,
+                    trailing = { LiquidSwitch(ui.compactionNotify, vm::setCompactionNotify) },
+                )
+            }
         }
-        items(ui.rows, key = { it.provider.id }) { row ->
-            ProviderCard(
-                label = row.provider.label,
-                hasKey = row.hasKey,
-                needsBaseUrl = row.needsBaseUrl,
-                baseUrl = row.provider.baseUrl.orEmpty(),
-                onSaveKey = { vm.saveKey(row.provider, it) },
-                onSaveBaseUrl = { vm.saveBaseUrl(row.provider, it) },
-            )
+
+        // ── Providers ──
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "CLOUD PROVIDERS",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                    modifier = Modifier.padding(start = 18.dp),
+                )
+                ui.rows.forEach { row ->
+                    ProviderCard(row, onSaveKey = vm::saveKey, onSaveBaseUrl = vm::saveBaseUrl)
+                }
+            }
+        }
+
+        // ── About ──
+        item {
+            LiquidGroup(title = "About") {
+                LiquidRow(title = "App", trailing = {
+                    Text("Orion Builder", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                })
+                LiquidRow(title = "Engine", trailing = {
+                    Text("MNN · arm64-v8a", style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFamily), color = Cosmos.TextMuted)
+                })
+                LiquidRow(
+                    title = "Secrets",
+                    subtitle = "API keys are encrypted with the Android Keystore",
+                    showDivider = false,
+                    trailing = { CosmosBadge("Keystore", BadgeTone.Green) },
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun CompactionCard(
-    enabled: Boolean,
-    threshold: Int,
-    keepRecent: Int,
-    notify: Boolean,
-    onEnabled: (Boolean) -> Unit,
-    onThreshold: (Int) -> Unit,
-    onKeepRecent: (Int) -> Unit,
-    onNotify: (Boolean) -> Unit,
-) {
-    com.legion.orion.core.design.GlassCard {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            com.legion.orion.core.design.Eyebrow("Context Compaction")
-            ToggleSetting("Auto compact", enabled, onEnabled)
-            SliderSetting(
-                label = "Compact at",
-                value = threshold,
-                suffix = "%",
-                range = 50f..95f,
-                steps = 8,
-                onChange = onThreshold,
-            )
-            SliderSetting(
-                label = "Keep recent turns",
-                value = keepRecent,
-                suffix = "",
-                range = 2f..20f,
-                steps = 17,
-                onChange = onKeepRecent,
-            )
-            ToggleSetting("Show compaction notices", notify, onNotify)
-            Text(
-                "Older turns are summarized into durable chat memory while recent messages stay verbatim.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
+private fun LiquidSwitch(checked: Boolean, onChange: (Boolean) -> Unit) {
+    Switch(
+        checked = checked,
+        onCheckedChange = onChange,
+        colors = SwitchDefaults.colors(
+            checkedTrackColor = Cosmos.Violet2,
+            checkedThumbColor = Color.White,
+            uncheckedTrackColor = Cosmos.GlassFillStrong,
+            uncheckedBorderColor = Cosmos.Hairline,
+        ),
+    )
 }
 
 @Composable
-private fun ToggleSetting(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = onChange)
-    }
-}
-
-@Composable
-private fun SliderSetting(
-    label: String,
-    value: Int,
-    suffix: String,
+private fun SliderRow(
+    title: String,
+    subtitle: String?,
+    value: Float,
     range: ClosedFloatingPointRange<Float>,
-    steps: Int,
-    onChange: (Int) -> Unit,
+    display: String,
+    onChange: (Float) -> Unit,
 ) {
-    Column {
+    Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            Text("$value$suffix", style = MaterialTheme.typography.labelMedium)
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyMedium, color = Cosmos.Text)
+                if (subtitle != null) {
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Cosmos.TextMuted)
+                }
+            }
+            Text(
+                display,
+                style = MaterialTheme.typography.labelMedium.copy(fontFamily = MonoFamily),
+                color = Cosmos.Violet3,
+            )
         }
         Slider(
-            value = value.toFloat(),
-            onValueChange = { onChange(it.toInt()) },
+            value = value,
+            onValueChange = onChange,
             valueRange = range,
-            steps = steps,
+            colors = SliderDefaults.colors(
+                thumbColor = Cosmos.Violet,
+                activeTrackColor = Cosmos.Violet2,
+                inactiveTrackColor = Cosmos.GlassFillStrong,
+            ),
         )
     }
 }
 
 @Composable
-private fun GeneralCard() {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val version = remember {
-        runCatching {
-            @Suppress("DEPRECATION")
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "—"
-    }
-    com.legion.orion.core.design.GlassCard {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            com.legion.orion.core.design.Eyebrow("General")
-            SettingRow("Appearance", "Cosmos · Dark") {
-                com.legion.orion.core.design.CosmosBadge("Dark", com.legion.orion.core.design.BadgeTone.Violet)
-            }
-            SettingRow("App version", "Orion Builder Android") {
-                com.legion.orion.core.design.CosmosBadge("v$version", com.legion.orion.core.design.BadgeTone.Neutral)
-            }
-            SettingRow("Target", "arm64-v8a · minSdk 29") {
-                com.legion.orion.core.design.CosmosBadge("MNN", com.legion.orion.core.design.BadgeTone.Green)
-            }
-            Text(
-                "Network & battery settings live in the Hub tab. YouTube publishing & media live in the Media tab.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun SettingRow(label: String, sub: String, trailing: @Composable () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.titleMedium)
-            Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        trailing()
-    }
-}
-
-@Composable
 private fun ProviderCard(
-    label: String,
-    hasKey: Boolean,
-    needsBaseUrl: Boolean,
-    baseUrl: String,
-    onSaveKey: (String) -> Unit,
-    onSaveBaseUrl: (String) -> Unit,
+    row: ProviderRow,
+    onSaveKey: (com.legion.orion.core.database.ProviderEntity, String) -> Unit,
+    onSaveBaseUrl: (com.legion.orion.core.database.ProviderEntity, String) -> Unit,
 ) {
-    var key by rememberSaveable(label) { mutableStateOf("") }
-    var url by rememberSaveable(label) { mutableStateOf(baseUrl) }
+    var key by rememberSaveable("key-${row.provider.id}") { mutableStateOf("") }
+    var baseUrl by rememberSaveable("url-${row.provider.id}") { mutableStateOf(row.provider.baseUrl ?: "") }
 
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(label, style = MaterialTheme.typography.titleMedium)
-                if (hasKey) {
-                    Icon(
-                        Icons.Filled.CheckCircle,
-                        contentDescription = "Key set",
-                        tint = MaterialTheme.colorScheme.secondary,
-                    )
-                }
-            }
-            if (needsBaseUrl) {
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text("Base URL (e.g. http://192.168.1.10:1234/v1)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Button(onClick = { onSaveBaseUrl(url) }, enabled = url.isNotBlank()) { Text("Save URL") }
-            }
-            OutlinedTextField(
-                value = key,
-                onValueChange = { key = it },
-                label = { Text(if (hasKey) "Replace API key" else "API key") },
-                singleLine = true,
-                visualTransformation = PasswordVisualTransformation(),
-                modifier = Modifier.fillMaxWidth(),
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .liquidGlass(shape = Liquid.ShapeMedium, fillTopAlpha = 0.08f)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                row.provider.label,
+                style = MaterialTheme.typography.titleSmall,
+                color = Cosmos.Text,
+                modifier = Modifier.weight(1f),
             )
-            Button(onClick = { onSaveKey(key); key = "" }, enabled = key.isNotBlank()) {
-                Text("Save key")
+            if (row.hasKey) {
+                Icon(Icons.Outlined.CheckCircle, null, tint = Cosmos.Green, modifier = Modifier.size(15.dp))
+                Spacer(Modifier.size(5.dp))
+                Text("Key saved", style = MaterialTheme.typography.labelSmall, color = Cosmos.Green)
+            } else {
+                Text("No key", style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted)
             }
         }
+
+        SettingsField(
+            value = key,
+            onChange = { key = it },
+            hint = if (row.hasKey) "Replace API key…" else "API key…",
+            password = true,
+        )
+        if (row.needsBaseUrl) {
+            SettingsField(value = baseUrl, onChange = { baseUrl = it }, hint = "Base URL (OpenAI-compatible)…")
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LiquidButton(
+                "Save",
+                compact = true,
+                enabled = key.isNotBlank() || (row.needsBaseUrl && baseUrl.isNotBlank()),
+                onClick = {
+                    if (key.isNotBlank()) {
+                        onSaveKey(row.provider, key)
+                        key = ""
+                    }
+                    if (row.needsBaseUrl && baseUrl.isNotBlank()) onSaveBaseUrl(row.provider, baseUrl)
+                },
+            )
+            if (row.hasKey) {
+                LiquidButton(
+                    "Clear key",
+                    compact = true,
+                    style = LiquidButtonStyle.Glass,
+                    onClick = { onSaveKey(row.provider, "") },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsField(
+    value: String,
+    onChange: (String) -> Unit,
+    hint: String,
+    password: Boolean = false,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .liquidGlass(shape = Liquid.ShapePill, fillTopAlpha = 0.06f)
+            .padding(horizontal = 13.dp, vertical = 11.dp),
+    ) {
+        BasicTextField(
+            value = value,
+            onValueChange = onChange,
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = Cosmos.Text, fontFamily = MonoFamily),
+            cursorBrush = SolidColor(Cosmos.Violet),
+            singleLine = true,
+            visualTransformation = if (password) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
+            decorationBox = { inner ->
+                Box {
+                    if (value.isEmpty()) {
+                        Text(hint, style = MaterialTheme.typography.bodyMedium, color = Cosmos.TextFaint)
+                    }
+                    inner()
+                }
+            },
+        )
     }
 }

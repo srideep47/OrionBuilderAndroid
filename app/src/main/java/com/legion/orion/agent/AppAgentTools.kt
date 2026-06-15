@@ -43,6 +43,11 @@ class AppAgentTools @Inject constructor(
         TakeScreenshotTool(preview),
         GetAccessibilityTreeTool(preview),
         BrowserQaGateTool(preview),
+        CheckRenderTool(preview),
+        EvalPreviewTool(preview),
+        ReadConsoleLogsTool(preview),
+        GetPageHtmlTool(preview),
+        InstallDependencyTool(node),
         InstallBuildToolchainTool(apkBuilder),
         BuildApkTool(apkBuilder),
         RunBuildJobTool(buildOffload, p2p),
@@ -327,6 +332,134 @@ private class CheckBuildJobTool(
     }
 }
 
+/**
+ * Verifies the page is actually STYLED — the check the QA gate can't make from
+ * console/network alone. Catches the common failure where a stylesheet is missing,
+ * mis-linked, or served with the wrong content-type, leaving a blank/unstyled page.
+ */
+private class CheckRenderTool(private val preview: PreviewController) : AgentTool {
+    override val name = "check_render"
+    override val description =
+        "Inspect the LIVE preview and report whether CSS actually applied: stylesheet load state, " +
+            "rule counts, and the computed body background/font. Call after start_dev_server to confirm " +
+            "a web page is styled (not just that files exist). Fails if the page is rendering unstyled."
+    override val parameters = objectSchema()
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+        if (!preview.isAttached) {
+            return ToolResult("Preview is not open. Start the dev server and open the Preview tab first.", isError = true)
+        }
+        val report = preview.renderReport()
+            ?: return ToolResult("Could not read the preview (page not loaded yet). Reload and retry.", isError = true)
+        val obj = runCatching { kotlinx.serialization.json.Json.parseToJsonElement(report) as? JsonObject }.getOrNull()
+        if (obj != null) {
+            val cssRules = obj["cssRules"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            val links = obj["links"]?.let { runCatching { (it as kotlinx.serialization.json.JsonArray) }.getOrNull() }
+            val styleTags = obj["styleTags"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+            val brokenLinks = links?.filter {
+                (it as? JsonObject)?.get("loaded")?.jsonPrimitive?.contentOrNull == "false"
+            }.orEmpty()
+            val problems = buildList {
+                brokenLinks.forEach { l ->
+                    val href = (l as? JsonObject)?.get("href")?.jsonPrimitive?.contentOrNull
+                    add("stylesheet '$href' did NOT load/apply — check the path is correct and the file exists")
+                }
+                if (cssRules == 0 && (links != null && links.isNotEmpty() || styleTags > 0)) {
+                    add("0 CSS rules are applied even though stylesheets/style tags are present — the page is rendering UNSTYLED. Verify <link href> paths and that style.css has content.")
+                }
+                if (cssRules == 0 && (links == null || links.isEmpty()) && styleTags == 0) {
+                    add("the page has NO stylesheets at all — add a <link rel=\"stylesheet\"> (or a <style> block) so it isn't unstyled.")
+                }
+            }
+            return if (problems.isEmpty()) {
+                ToolResult("Render OK — styles applied. $report")
+            } else {
+                ToolResult("Render PROBLEMS:\n- " + problems.joinToString("\n- ") + "\n\nfull report: $report", isError = true)
+            }
+        }
+        return ToolResult(report)
+    }
+}
+
+/** Runs arbitrary JS in the preview — powerful inspection / interaction. */
+private class EvalPreviewTool(private val preview: PreviewController) : AgentTool {
+    override val name = "eval_in_preview"
+    override val description =
+        "Evaluate a JavaScript expression in the live preview and return its result (stringified). " +
+            "Use to inspect the rendered DOM/state or trigger interactions, e.g. " +
+            "\"getComputedStyle(document.querySelector('.btn')).backgroundColor\" or " +
+            "\"document.querySelectorAll('.card').length\"."
+    override val parameters = objectSchema(Param("expression", "string", "JavaScript expression to evaluate"))
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+        if (!preview.isAttached) return ToolResult("Preview is not open.", isError = true)
+        val expr = args.str("expression") ?: return ToolResult("Missing 'expression'", isError = true)
+        // Wrap so a bare expression returns a string; errors are reported, not thrown.
+        val js = "(function(){try{return String(eval(${kotlinx.serialization.json.Json.encodeToString(kotlinx.serialization.json.JsonPrimitive(expr))}));}catch(e){return 'ERROR: '+e;}})();"
+        val out = preview.eval(js) ?: return ToolResult("(no result / preview not ready)")
+        return ToolResult(out.take(4000), isError = out.startsWith("ERROR:"))
+    }
+}
+
+/** Returns all captured console output (not just errors). */
+private class ReadConsoleLogsTool(private val preview: PreviewController) : AgentTool {
+    override val name = "read_console_logs"
+    override val description = "Read recent browser console output from the preview (all levels), newest last."
+    override val parameters = objectSchema()
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+        val logs = preview.consoleLog()
+        if (logs.isEmpty()) return ToolResult("(no console output captured)")
+        val text = logs.takeLast(80).joinToString("\n") {
+            "[${it.level}] ${it.message}${if (it.source.isNotBlank()) " (${it.source}:${it.line})" else ""}"
+        }
+        return ToolResult(text)
+    }
+}
+
+/** Returns the rendered DOM HTML — useful to confirm structure actually mounted. */
+private class GetPageHtmlTool(private val preview: PreviewController) : AgentTool {
+    override val name = "get_page_html"
+    override val description =
+        "Get the rendered HTML of the live preview (document.documentElement.outerHTML). Confirms what " +
+            "actually mounted in the DOM, including dynamically-rendered content."
+    override val parameters = objectSchema()
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+        if (!preview.isAttached) return ToolResult("Preview is not open.", isError = true)
+        val html = preview.eval("document.documentElement.outerHTML")
+            ?: return ToolResult("(page not loaded)", isError = true)
+        return ToolResult(html.take(12_000))
+    }
+}
+
+/** Installs an npm dependency into the project (allowlisted to npm). */
+private class InstallDependencyTool(private val node: NodeController) : AgentTool {
+    override val name = "install_dependency"
+    override val description =
+        "Install one or more npm packages into the project (runs 'npm install <pkgs>'). " +
+            "Use for web projects that need a library. Dev deps: set dev=true."
+    override val parameters = objectSchema(
+        Param("packages", "string", "Space-separated package names, e.g. 'zustand clsx'"),
+        Param("dev", "boolean", "Install as devDependencies (default false)", required = false),
+    )
+    override val mutating = true
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+        val pkgs = args.str("packages")?.trim().orEmpty()
+        if (pkgs.isEmpty()) return ToolResult("Missing 'packages'", isError = true)
+        // Block obviously unsafe shell metacharacters — only package tokens allowed.
+        if (pkgs.any { it in ";|&`$<>(){}\n" }) return ToolResult("Invalid characters in package list", isError = true)
+        val dev = args["dev"]?.jsonPrimitive?.booleanOrNull ?: false
+        val argv = buildList {
+            add("npm"); add("install"); if (dev) add("--save-dev")
+            addAll(pkgs.split(Regex("\\s+")).filter { it.isNotBlank() })
+        }
+        val (code, output) = node.exec(argv, ctx.projectDir.absolutePath)
+        return ToolResult("exit=$code\n${output.take(6000)}", isError = code != 0)
+    }
+}
+
 /** Gate that must pass before claiming a UI task is done: no console errors, no failed requests, page has content. */
 private class BrowserQaGateTool(private val preview: PreviewController) : AgentTool {
     override val name = "browser_qa_gate"
@@ -339,12 +472,30 @@ private class BrowserQaGateTool(private val preview: PreviewController) : AgentT
         if (!preview.isAttached) return ToolResult("Preview is not open — cannot run QA gate.", isError = true)
         val diag = preview.diagnostics()
         val tree = preview.accessibilityTree().orEmpty()
+        val report = preview.renderReport()
+        val obj = report?.let { runCatching { kotlinx.serialization.json.Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
+        val cssRules = obj?.get("cssRules")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: -1
+        val links = (obj?.get("links") as? kotlinx.serialization.json.JsonArray)
+        val styleTags = obj?.get("styleTags")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
         val problems = buildList {
             if (diag.consoleErrors.isNotEmpty()) add("console errors:\n  " + diag.consoleErrors.joinToString("\n  "))
             if (diag.failedRequests.isNotEmpty()) add("failed requests:\n  " + diag.failedRequests.joinToString("\n  "))
             if (tree.isBlank()) add("page has no accessible content")
+            // Unstyled-page detection (the silent failure the other checks miss).
+            if (cssRules == 0 && ((links != null && links.isNotEmpty()) || styleTags > 0)) {
+                add("page is UNSTYLED — stylesheets are referenced but 0 CSS rules applied (check <link href> paths / file contents)")
+            }
+            links?.forEach { l ->
+                if ((l as? JsonObject)?.get("loaded")?.jsonPrimitive?.contentOrNull == "false") {
+                    val href = (l as? JsonObject)?.get("href")?.jsonPrimitive?.contentOrNull
+                    add("stylesheet '$href' failed to apply")
+                }
+            }
         }
-        return if (problems.isEmpty()) ToolResult("QA gate PASSED: no console errors, no failed requests, page has content.")
-        else ToolResult("QA gate FAILED:\n" + problems.joinToString("\n"), isError = true)
+        return if (problems.isEmpty()) {
+            ToolResult("QA gate PASSED: no console errors, no failed requests, page has content, styles applied (cssRules=$cssRules).")
+        } else {
+            ToolResult("QA gate FAILED:\n" + problems.joinToString("\n"), isError = true)
+        }
     }
 }
