@@ -123,7 +123,7 @@ class NodeController @Inject constructor(
     companion object {
         private const val TAG = "NodeController"
         const val CONTROL_PORT = 8137
-        private const val ASSET_VERSION = "node18-npm1082-babel724-p2p-v6-cssmime"
+        private const val ASSET_VERSION = "node18-npm1082-babel724-p2p-v7-mediagen-share"
         private val JSON_MEDIA = "application/json".toMediaType()
     }
 }

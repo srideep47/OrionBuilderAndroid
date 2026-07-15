@@ -30,6 +30,9 @@ class SettingsRepository @Inject constructor(
         val COMPACTION_NOTIFY = booleanPreferencesKey("compaction_notify")
         val MAX_AGENT_ITERATIONS = intPreferencesKey("max_agent_iterations")
         val HAPTICS_ENABLED = booleanPreferencesKey("haptics_enabled")
+        val CLAUDE_CODE_MODEL = stringPreferencesKey("claude_code_model")
+        val CLAUDE_CODE_EFFORT = stringPreferencesKey("claude_code_effort")
+        val CLAUDE_CODE_PERMISSION_MODE = stringPreferencesKey("claude_code_permission_mode")
     }
 
     val lastModelPath: Flow<String?> =
@@ -64,6 +67,19 @@ class SettingsRepository @Inject constructor(
 
     val hapticsEnabled: Flow<Boolean> =
         context.settingsDataStore.data.map { it[Keys.HAPTICS_ENABLED] ?: true }
+
+    /** null = no `--model` flag passed, Claude Code uses the account's own default model. */
+    val claudeCodeModel: Flow<String?> =
+        context.settingsDataStore.data.map { it[Keys.CLAUDE_CODE_MODEL] }
+
+    val claudeCodeEffort: Flow<String> =
+        context.settingsDataStore.data.map { it[Keys.CLAUDE_CODE_EFFORT] ?: "medium" }
+
+    /** bypassPermissions, not acceptEdits: acceptEdits only auto-approves file edits, still blocking
+     * Bash on "This command requires approval" with no one to ever answer it headlessly — confirmed
+     * on-device this silently broke preview dev-server launches. */
+    val claudeCodePermissionMode: Flow<String> =
+        context.settingsDataStore.data.map { it[Keys.CLAUDE_CODE_PERMISSION_MODE] ?: "bypassPermissions" }
 
     suspend fun setLastModel(path: String, backend: String) {
         context.settingsDataStore.edit {
@@ -105,5 +121,13 @@ class SettingsRepository @Inject constructor(
 
     suspend fun setHapticsEnabled(enabled: Boolean) {
         context.settingsDataStore.edit { it[Keys.HAPTICS_ENABLED] = enabled }
+    }
+
+    suspend fun setClaudeCodeOptions(model: String?, effort: String, permissionMode: String) {
+        context.settingsDataStore.edit {
+            if (model != null) it[Keys.CLAUDE_CODE_MODEL] = model else it.remove(Keys.CLAUDE_CODE_MODEL)
+            it[Keys.CLAUDE_CODE_EFFORT] = effort
+            it[Keys.CLAUDE_CODE_PERMISSION_MODE] = permissionMode
+        }
     }
 }

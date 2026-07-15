@@ -91,14 +91,6 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
                     display = ui.maxAgentIterations.toString(),
                     onChange = { vm.setMaxAgentIterations(it.toInt()) },
                 )
-                LiquidRow(
-                    title = "Haptic feedback",
-                    subtitle = "Subtle ticks on taps and toggles",
-                    showDivider = false,
-                    trailing = {
-                        LiquidSwitch(ui.hapticsEnabled, vm::setHapticsEnabled)
-                    },
-                )
             }
         }
 
@@ -130,6 +122,18 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
                     title = "Notify on compaction",
                     showDivider = false,
                     trailing = { LiquidSwitch(ui.compactionNotify, vm::setCompactionNotify) },
+                )
+            }
+        }
+
+        // ── App behavior ──
+        item {
+            LiquidGroup(title = "App behavior") {
+                LiquidRow(
+                    title = "Haptic feedback",
+                    subtitle = "Subtle ticks on taps and toggles",
+                    showDivider = false,
+                    trailing = { LiquidSwitch(ui.hapticsEnabled, vm::setHapticsEnabled) },
                 )
             }
         }

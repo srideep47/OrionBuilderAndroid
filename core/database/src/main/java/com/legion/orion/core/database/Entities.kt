@@ -177,3 +177,13 @@ data class ChatFtsEntity(
     val messageId: String,
     val content: String,
 )
+
+/** Maps a project to its persistent Claude Code CLI session id, so the per-project `proot`+`claude`
+ * process can be resumed (`--resume <claudeSessionId>`) after it dies (app killed/backgrounded) rather
+ * than starting a brand-new conversation. */
+@Entity(tableName = "claude_code_sessions")
+data class ClaudeCodeSessionEntity(
+    @PrimaryKey val projectId: String,
+    val claudeSessionId: String,
+    val createdAt: Long,
+)

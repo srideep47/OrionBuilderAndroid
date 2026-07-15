@@ -38,7 +38,9 @@ object MsgRole {
 private data class PartPayload(val text: String)
 
 /** A tool-call card's data — name, raw args, status (running|done|error), result text, and the
- * shadow-ref commit to roll back to. Mirrors the desktop tool-call presentation. */
+ * shadow-ref commit to roll back to. Mirrors the desktop tool-call presentation. [diff], if present,
+ * is a pre-formatted unified diff (from Claude Code's own `structuredPatch` on Edit tool results) to
+ * render instead of the raw before/after text. */
 @Serializable
 data class ToolView(
     val name: String,
@@ -47,6 +49,7 @@ data class ToolView(
     val result: String? = null,
     val snapshotRef: String? = null,
     val snapshotCommit: String? = null,
+    val diff: String? = null,
 )
 
 /** A message with its ordered parts, ready for rendering. */
@@ -91,6 +94,11 @@ class ChatRepository @Inject constructor(
     }
 
     suspend fun renameChat(chat: ChatEntity, title: String) = chatDao.upsert(chat.copy(title = title))
+
+    suspend fun renameChat(chatId: String, title: String) {
+        val chat = chatDao.get(chatId) ?: return
+        chatDao.upsert(chat.copy(title = title))
+    }
 
     suspend fun updateSummary(chatId: String, summary: String?) {
         val chat = chatDao.get(chatId) ?: return

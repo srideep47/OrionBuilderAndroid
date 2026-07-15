@@ -29,6 +29,22 @@ data class P2pPeer(
     val appVersion: String = "",
 )
 
+/**
+ * A sharable media item as advertised in a MEDIA_ANNOUNCE. Mirrors the desktop `SharedMediaMeta`
+ * (peer-channel.ts) byte-for-byte so phone and desktop catalogs interoperate.
+ */
+@Serializable
+data class SharedMediaItem(
+    val fileName: String,
+    /** image | video | audio | model */
+    val kind: String = "image",
+    val mimeType: String = "application/octet-stream",
+    val sizeBytes: Long = 0,
+    val prompt: String? = null,
+    /** Small base64 data-URL thumbnail (optional). */
+    val thumbnail: String? = null,
+)
+
 @Serializable
 data class FriendRequest(
     val fromPublicKey: String,
@@ -101,10 +117,15 @@ sealed interface P2pEvent {
     data class InferenceChunk(val requestId: String, val data: JsonElement) : P2pEvent
     data class InferenceDone(val requestId: String) : P2pEvent
     data class InferenceError(val requestId: String, val error: String) : P2pEvent
-    data class MediaAccepted(val peerId: String, val jobId: String) : P2pEvent
-    data class MediaProgress(val peerId: String, val jobId: String, val progress: Double, val stage: String) : P2pEvent
-    data class MediaResult(val peerId: String, val jobId: String, val mimeType: String, val dataBase64: String, val fileName: String) : P2pEvent
-    data class MediaError(val peerId: String, val jobId: String, val error: String) : P2pEvent
+    // Inline one-shot generation (we requested; a peer streams the asset back).
+    data class MediaGenChunk(val peerId: String, val requestId: String, val data: String, val eof: Boolean) : P2pEvent
+    data class MediaGenError(val peerId: String, val requestId: String, val error: String) : P2pEvent
+    // Media sharing catalog (browse/serve media shared across the network).
+    data class MediaAnnounce(val peerId: String, val items: List<SharedMediaItem>) : P2pEvent
+    data class MediaListRequest(val peerId: String) : P2pEvent
+    data class MediaDownloadRequest(val peerId: String, val requestId: String, val fileName: String) : P2pEvent
+    data class MediaDownloadChunk(val peerId: String, val requestId: String, val data: String, val eof: Boolean) : P2pEvent
+    data class MediaDownloadError(val peerId: String, val requestId: String, val error: String) : P2pEvent
     data class BuildAccepted(val peerId: String, val jobId: String) : P2pEvent
     data class BuildLog(val peerId: String, val jobId: String, val line: String) : P2pEvent
     data class BuildResult(val peerId: String, val jobId: String, val ok: Boolean, val artifactName: String?, val artifactBase64: String?, val error: String?) : P2pEvent
@@ -134,22 +155,25 @@ internal data class InferenceDoneData(val requestId: String)
 internal data class InferenceErrorData(val requestId: String, @SerialName("error") val error: String)
 
 @Serializable
-internal data class MediaAcceptedData(val peerId: String, val jobId: String)
+internal data class MediaGenChunkData(val peerId: String = "", val requestId: String, val data: String = "", val eof: Boolean = false)
 
 @Serializable
-internal data class MediaProgressData(val peerId: String, val jobId: String, val progress: Double = 0.0, val stage: String = "")
+internal data class MediaGenErrorData(val peerId: String = "", val requestId: String, val error: String = "")
 
 @Serializable
-internal data class MediaResultData(
-    val peerId: String,
-    val jobId: String,
-    val mimeType: String = "application/octet-stream",
-    val dataBase64: String = "",
-    val fileName: String = "",
-)
+internal data class MediaAnnounceData(val peerId: String, val items: List<SharedMediaItem> = emptyList())
 
 @Serializable
-internal data class MediaErrorData(val peerId: String, val jobId: String, val error: String = "")
+internal data class MediaListRequestData(val peerId: String)
+
+@Serializable
+internal data class MediaDownloadRequestData(val peerId: String, val requestId: String, val fileName: String)
+
+@Serializable
+internal data class MediaDownloadChunkData(val peerId: String, val requestId: String, val data: String = "", val eof: Boolean = false)
+
+@Serializable
+internal data class MediaDownloadErrorData(val peerId: String, val requestId: String, val error: String = "")
 
 @Serializable
 internal data class BuildAcceptedData(val peerId: String, val jobId: String)

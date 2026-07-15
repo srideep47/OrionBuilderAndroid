@@ -50,11 +50,10 @@ import com.legion.orion.core.design.LocalBottomChromeHeight
 import com.legion.orion.core.design.LocalHazeState
 import com.legion.orion.core.design.liquidGlass
 import com.legion.orion.core.design.rememberHaptic
-import com.legion.orion.feature.chat.ChatScreen
+import com.legion.orion.feature.code.CodeScreen
 import com.legion.orion.feature.hub.HubScreen
 import com.legion.orion.feature.models.ModelsScreen
 import com.legion.orion.feature.settings.SettingsScreen
-import com.legion.orion.feature.workspace.BuildWorkspace
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeSource
 
@@ -78,13 +77,12 @@ fun OrionApp() {
 
             NavHost(
                 navController = navController,
-                startDestination = TopDestination.CHAT.route,
+                startDestination = TopDestination.CODE.route,
                 modifier = Modifier
                     .fillMaxSize()
                     .hazeSource(hazeState),
             ) {
-                composable(TopDestination.CHAT.route) { ChatScreen() }
-                composable(TopDestination.BUILD.route) { BuildWorkspace() }
+                composable(TopDestination.CODE.route) { CodeScreen() }
                 composable(TopDestination.MODELS.route) { ModelsScreen() }
                 composable(TopDestination.HUB.route) { HubScreen() }
                 composable(TopDestination.SETTINGS.route) { SettingsScreen() }

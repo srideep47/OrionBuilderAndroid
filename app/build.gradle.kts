@@ -124,6 +124,8 @@ dependencies {
     implementation(libs.work.runtime)
     implementation(libs.sora.editor)
     implementation(libs.jgit)
+    implementation(libs.commons.compress)
+    implementation(libs.xz)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.ext.junit)

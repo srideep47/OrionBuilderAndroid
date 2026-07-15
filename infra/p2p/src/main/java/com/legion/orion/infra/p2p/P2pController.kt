@@ -156,10 +156,23 @@ class P2pController @Inject constructor(
 
     suspend fun cancelInference(peerId: String, requestId: String) = bridge.cancelInference(peerId, requestId)
 
-    suspend fun submitMediaJob(peerId: String, jobId: String, job: kotlinx.serialization.json.JsonElement) =
-        bridge.submitMediaJob(peerId, jobId, job)
+    suspend fun requestMediaGen(
+        peerId: String, requestId: String, modelType: String, prompt: String, ext: String,
+        options: kotlinx.serialization.json.JsonElement? = null,
+    ) = bridge.requestMediaGen(peerId, requestId, modelType, prompt, ext, options)
 
-    suspend fun cancelMediaJob(peerId: String, jobId: String) = bridge.cancelMediaJob(peerId, jobId)
+    suspend fun requestMediaList(peerId: String) = bridge.requestMediaList(peerId)
+
+    suspend fun announceMedia(peerId: String?, items: List<SharedMediaItem>) = bridge.announceMedia(peerId, items)
+
+    suspend fun requestMediaDownload(peerId: String, requestId: String, fileName: String) =
+        bridge.requestMediaDownload(peerId, requestId, fileName)
+
+    suspend fun respondMediaDownloadChunk(peerId: String, requestId: String, dataB64: String, eof: Boolean) =
+        bridge.respondMediaDownloadChunk(peerId, requestId, dataB64, eof)
+
+    suspend fun respondMediaDownloadError(peerId: String, requestId: String, error: String) =
+        bridge.respondMediaDownloadError(peerId, requestId, error)
 
     suspend fun submitBuildJob(peerId: String, jobId: String, job: kotlinx.serialization.json.JsonElement, bundleBase64: String) =
         bridge.submitBuildJob(peerId, jobId, job, bundleBase64)
@@ -194,7 +207,9 @@ class P2pController @Inject constructor(
             is P2pEvent.InferenceCancelled -> _inferenceCancels.emit(event)
             is P2pEvent.InferenceChunk, is P2pEvent.InferenceDone, is P2pEvent.InferenceError ->
                 _inferenceReplies.emit(event)
-            is P2pEvent.MediaAccepted, is P2pEvent.MediaProgress, is P2pEvent.MediaResult, is P2pEvent.MediaError ->
+            is P2pEvent.MediaGenChunk, is P2pEvent.MediaGenError,
+            is P2pEvent.MediaAnnounce, is P2pEvent.MediaListRequest,
+            is P2pEvent.MediaDownloadRequest, is P2pEvent.MediaDownloadChunk, is P2pEvent.MediaDownloadError ->
                 _mediaEvents.emit(event)
             is P2pEvent.BuildAccepted, is P2pEvent.BuildLog, is P2pEvent.BuildResult ->
                 _buildEvents.emit(event)

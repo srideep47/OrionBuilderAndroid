@@ -28,8 +28,9 @@ import javax.inject.Singleton
         BuildJobEntity::class,
         PublishJobEntity::class,
         ChatFtsEntity::class,
+        ClaudeCodeSessionEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class OrionDatabase : RoomDatabase() {
@@ -44,6 +45,7 @@ abstract class OrionDatabase : RoomDatabase() {
     abstract fun peerDao(): PeerDao
     abstract fun jobsDao(): JobsDao
     abstract fun chatFtsDao(): ChatFtsDao
+    abstract fun claudeCodeSessionDao(): ClaudeCodeSessionDao
 }
 
 @Module
@@ -55,6 +57,7 @@ object DatabaseModule {
     fun providesDatabase(@ApplicationContext context: Context): OrionDatabase =
         Room.databaseBuilder(context, OrionDatabase::class.java, "orion.db")
             .fallbackToDestructiveMigrationOnDowngrade()
+            .fallbackToDestructiveMigration() // pre-release: no migration path yet for schema bumps
             .build()
 
     @Provides fun projectDao(db: OrionDatabase) = db.projectDao()
@@ -68,4 +71,5 @@ object DatabaseModule {
     @Provides fun peerDao(db: OrionDatabase) = db.peerDao()
     @Provides fun jobsDao(db: OrionDatabase) = db.jobsDao()
     @Provides fun chatFtsDao(db: OrionDatabase) = db.chatFtsDao()
+    @Provides fun claudeCodeSessionDao(db: OrionDatabase) = db.claudeCodeSessionDao()
 }

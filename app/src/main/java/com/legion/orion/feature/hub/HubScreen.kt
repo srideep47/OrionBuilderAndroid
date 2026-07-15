@@ -23,6 +23,7 @@ import com.legion.orion.core.design.Cosmos
 import com.legion.orion.core.design.LiquidSegmented
 import com.legion.orion.feature.media.MediaPane
 import com.legion.orion.feature.media.PublishPane
+import com.legion.orion.feature.media.SharedMediaPane
 import com.legion.orion.feature.network.NetworkScreen
 
 /**
@@ -56,7 +57,7 @@ fun HubScreen() {
         }
 
         LiquidSegmented(
-            options = listOf("Peers", "Media", "Publish"),
+            options = listOf("Peers", "Media", "Shared", "Publish"),
             selectedIndex = pane,
             onSelect = { pane = it },
             modifier = Modifier
@@ -67,6 +68,7 @@ fun HubScreen() {
         when (pane) {
             0 -> NetworkScreen()
             1 -> MediaPane()
+            2 -> SharedMediaPane()
             else -> PublishPane()
         }
     }

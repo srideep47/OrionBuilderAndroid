@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -116,11 +117,41 @@ class P2pBridgeClient @Inject constructor() {
             put("peerId", peerId); put("requestId", requestId); put("error", error)
         })
 
-    suspend fun submitMediaJob(peerId: String, jobId: String, job: JsonElement) =
-        post("/media/submit", buildJsonObject { put("peerId", peerId); put("jobId", jobId); put("job", job) })
+    /** Inline one-shot generation: ask a peer to generate one asset and stream it back. */
+    suspend fun requestMediaGen(
+        peerId: String, requestId: String, modelType: String, prompt: String, ext: String, options: JsonElement? = null,
+    ) = post("/media/gen", buildJsonObject {
+        put("peerId", peerId); put("requestId", requestId); put("modelType", modelType)
+        put("prompt", prompt); put("ext", ext); if (options != null) put("options", options)
+    })
 
-    suspend fun cancelMediaJob(peerId: String, jobId: String) =
-        post("/media/cancel", buildJsonObject { put("peerId", peerId); put("jobId", jobId) })
+    /** Ask a peer to (re)announce its shared media catalog. */
+    suspend fun requestMediaList(peerId: String) =
+        post("/media/list", buildJsonObject { put("peerId", peerId) })
+
+    /** Publish our shared catalog — to one peer, or broadcast to all trusted when peerId is null. */
+    suspend fun announceMedia(peerId: String?, items: List<SharedMediaItem>) =
+        post("/media/announce", buildJsonObject {
+            if (peerId != null) put("peerId", peerId)
+            put("items", json.encodeToJsonElement(ListSerializer(SharedMediaItem.serializer()), items))
+        })
+
+    /** Request the bytes of one shared file from a peer (streamed back as download chunks). */
+    suspend fun requestMediaDownload(peerId: String, requestId: String, fileName: String) =
+        post("/media/download", buildJsonObject {
+            put("peerId", peerId); put("requestId", requestId); put("fileName", fileName)
+        })
+
+    /** Serve one base64 chunk of a file a peer requested from us; eof marks the last chunk. */
+    suspend fun respondMediaDownloadChunk(peerId: String, requestId: String, dataB64: String, eof: Boolean) =
+        post("/media/download/respond", buildJsonObject {
+            put("peerId", peerId); put("requestId", requestId); put("data", dataB64); put("eof", eof)
+        })
+
+    suspend fun respondMediaDownloadError(peerId: String, requestId: String, error: String) =
+        post("/media/download/respond", buildJsonObject {
+            put("peerId", peerId); put("requestId", requestId); put("error", error)
+        })
 
     suspend fun submitBuildJob(peerId: String, jobId: String, job: JsonElement, bundleBase64: String) =
         post("/build/submit", buildJsonObject {
@@ -172,14 +203,20 @@ class P2pBridgeClient @Inject constructor() {
                 .let { P2pEvent.InferenceDone(it.requestId) }
             "inference-error" -> json.decodeFromJsonElement(InferenceErrorData.serializer(), data!!)
                 .let { P2pEvent.InferenceError(it.requestId, it.error) }
-            "media-accepted" -> json.decodeFromJsonElement(MediaAcceptedData.serializer(), data!!)
-                .let { P2pEvent.MediaAccepted(it.peerId, it.jobId) }
-            "media-progress" -> json.decodeFromJsonElement(MediaProgressData.serializer(), data!!)
-                .let { P2pEvent.MediaProgress(it.peerId, it.jobId, it.progress, it.stage) }
-            "media-result" -> json.decodeFromJsonElement(MediaResultData.serializer(), data!!)
-                .let { P2pEvent.MediaResult(it.peerId, it.jobId, it.mimeType, it.dataBase64, it.fileName) }
-            "media-error" -> json.decodeFromJsonElement(MediaErrorData.serializer(), data!!)
-                .let { P2pEvent.MediaError(it.peerId, it.jobId, it.error) }
+            "media-gen-chunk" -> json.decodeFromJsonElement(MediaGenChunkData.serializer(), data!!)
+                .let { P2pEvent.MediaGenChunk(it.peerId, it.requestId, it.data, it.eof) }
+            "media-gen-error" -> json.decodeFromJsonElement(MediaGenErrorData.serializer(), data!!)
+                .let { P2pEvent.MediaGenError(it.peerId, it.requestId, it.error) }
+            "media-announce" -> json.decodeFromJsonElement(MediaAnnounceData.serializer(), data!!)
+                .let { P2pEvent.MediaAnnounce(it.peerId, it.items) }
+            "media-list-request" -> json.decodeFromJsonElement(MediaListRequestData.serializer(), data!!)
+                .let { P2pEvent.MediaListRequest(it.peerId) }
+            "media-download-request" -> json.decodeFromJsonElement(MediaDownloadRequestData.serializer(), data!!)
+                .let { P2pEvent.MediaDownloadRequest(it.peerId, it.requestId, it.fileName) }
+            "media-download-chunk" -> json.decodeFromJsonElement(MediaDownloadChunkData.serializer(), data!!)
+                .let { P2pEvent.MediaDownloadChunk(it.peerId, it.requestId, it.data, it.eof) }
+            "media-download-error" -> json.decodeFromJsonElement(MediaDownloadErrorData.serializer(), data!!)
+                .let { P2pEvent.MediaDownloadError(it.peerId, it.requestId, it.error) }
             "build-accepted" -> json.decodeFromJsonElement(BuildAcceptedData.serializer(), data!!)
                 .let { P2pEvent.BuildAccepted(it.peerId, it.jobId) }
             "build-log" -> json.decodeFromJsonElement(BuildLogData.serializer(), data!!)

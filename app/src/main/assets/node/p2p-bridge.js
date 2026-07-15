@@ -453,6 +453,14 @@ function handleMessage(remoteHex, channel, msg) {
     case 'MEDIA_JOB_STATUS':
       emit('media-status', { peerId: remoteHex, jobId: msg.jobId, status: msg.status, stage: msg.stage || '', error: msg.error || null, fileNames: msg.fileNames || [] });
       return;
+    // Inline one-shot media generation (desktop media-node protocol). The phone is requester-only —
+    // it never generates media locally (non-negotiable), so an inbound request is refused so the
+    // asking peer uses its own fallback chain.
+    case 'MEDIA_GEN_REQUEST':
+      channel.send({ type: 'MEDIA_GEN_ERROR', requestId: msg.requestId, error: 'This device does not generate media locally' });
+      return;
+    case 'MEDIA_GEN_CHUNK': emit('media-gen-chunk', { peerId: remoteHex, requestId: msg.requestId, data: msg.data, eof: !!msg.eof }); return;
+    case 'MEDIA_GEN_ERROR': emit('media-gen-error', { peerId: remoteHex, requestId: msg.requestId, error: msg.error }); return;
     case 'MEDIA_ANNOUNCE': emit('media-announce', { peerId: remoteHex, items: msg.items || [] }); return;
     case 'MEDIA_LIST_REQUEST': emit('media-list-request', { peerId: remoteHex }); return;
     case 'MEDIA_DOWNLOAD_REQUEST':
@@ -532,6 +540,25 @@ const routes = {
       audioPrompt: b.audioPrompt, audioKind: b.audioKind, aspectRatio: b.aspectRatio, durationSec: b.durationSec,
     });
     return { ok };
+  },
+  // Inline one-shot media generation: ask a peer to generate one asset and stream it back
+  // (desktop MEDIA_GEN_REQUEST → MEDIA_GEN_CHUNK/ERROR, handled by its media-node).
+  'POST /media/gen': async (b) => {
+    const e = connected.get(b.peerId);
+    if (!e || e.channel.isClosed()) return { ok: false, error: 'peer not connected' };
+    const ok = e.channel.send({
+      type: 'MEDIA_GEN_REQUEST', requestId: b.requestId, modelType: b.modelType,
+      prompt: b.prompt, modelId: b.modelId, options: b.options, ext: b.ext,
+    });
+    return { ok };
+  },
+  // Announce our sharable media catalog (MEDIA_ANNOUNCE). To one peer when peerId is set,
+  // else broadcast to every trusted peer. Used to publish this device's gallery to the network.
+  'POST /media/announce': async (b) => {
+    const items = b.items || [];
+    if (b.peerId) { connected.get(b.peerId)?.channel.send({ type: 'MEDIA_ANNOUNCE', items }); }
+    else { for (const e of connected.values()) if (trusted.has(e.peer.publicKey)) e.channel.send({ type: 'MEDIA_ANNOUNCE', items }); }
+    return { ok: true };
   },
   // Pull a finished file from the host peer (desktop media-share protocol).
   'POST /media/download': async (b) => {

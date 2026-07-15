@@ -4,12 +4,16 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.legion.orion.core.database.JobsDao
 import com.legion.orion.data.media.MediaManager
+import com.legion.orion.data.media.RemoteCatalog
+import com.legion.orion.data.media.ShareDownloadState
 import com.legion.orion.data.publish.PublishManager
 import com.legion.orion.data.publish.PublishMeta
 import com.legion.orion.data.publish.YouTubeAuth
+import com.legion.orion.infra.p2p.SharedMediaItem
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -45,6 +49,16 @@ class MediaViewModel @Inject constructor(
 
     val publishJobs = jobsDao.observePublishJobs()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Media shared by trusted peers across the network (grouped by peer). */
+    val catalogs: StateFlow<List<RemoteCatalog>> = manager.catalogs
+    /** Progress of shared-media downloads we started, keyed by "peerKey/fileName". */
+    val downloads: StateFlow<Map<String, ShareDownloadState>> = manager.downloads
+
+    /** Re-sync the shared catalog with all trusted peers (publishes ours, pulls theirs). */
+    fun refreshShared() { viewModelScope.launch { manager.refreshCatalogs() } }
+
+    fun downloadShared(peerKey: String, item: SharedMediaItem) = manager.download(peerKey, item)
 
     fun refreshPeerState() {
         _ui.value = _ui.value.copy(hasComputePeer = manager.hasComputePeer())

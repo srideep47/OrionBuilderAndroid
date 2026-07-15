@@ -1,5 +1,7 @@
 package com.legion.orion.feature.chat
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -24,6 +26,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -54,6 +57,7 @@ import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -75,6 +79,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -105,90 +111,22 @@ import com.legion.orion.feature.editor.EditorScreen
 import com.legion.orion.feature.preview.PreviewScreen
 import com.legion.orion.inference.EngineState
 
-/**
- * Orion Command — the unified chat surface. One input drives plain chat or the
- * full build agent; Preview and Code live one swipe away as content tabs.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun ChatScreen(vm: ChatViewModel = hiltViewModel()) {
-    val ui by vm.ui.collectAsStateWithLifecycle()
-    val messages by vm.messages.collectAsStateWithLifecycle()
-    val chats by vm.chats.collectAsStateWithLifecycle()
-    val engine by vm.engineState.collectAsStateWithLifecycle()
-
-    var drawerOpen by remember { mutableStateOf(false) }
-    var modelSheetOpen by remember { mutableStateOf(false) }
-
-    Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
-            CommandHeader(
-                ui = ui,
-                engine = engine,
-                onMenu = { drawerOpen = true },
-                onModelPicker = {
-                    ui.selectedProvider?.let(vm::loadModelsFor)
-                    modelSheetOpen = true
-                },
-                onNewChat = vm::newChat,
-            )
-
-            LiquidSegmented(
-                options = listOf("Chat", "Preview", "Code"),
-                selectedIndex = ui.contentTab.ordinal,
-                onSelect = { vm.setContentTab(CommandContentTab.entries[it]) },
-                modifier = Modifier
-                    .padding(horizontal = 16.dp)
-                    .padding(bottom = 6.dp),
-            )
-
-            when (ui.contentTab) {
-                CommandContentTab.PREVIEW -> Box(Modifier.weight(1f)) { PreviewScreen() }
-                CommandContentTab.CODE -> Box(Modifier.weight(1f)) { EditorScreen() }
-                CommandContentTab.CHAT -> ChatContent(
-                    ui = ui,
-                    messages = messages,
-                    vm = vm,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-        }
-
-        if (drawerOpen) {
-            HistorySheet(
-                chats = chats,
-                activeId = ui.activeChatId,
-                onOpen = { vm.openChat(it); drawerOpen = false },
-                onDelete = vm::deleteChat,
-                onNew = { vm.newChat(); drawerOpen = false },
-                onDismiss = { drawerOpen = false },
-            )
-        }
-
-        if (modelSheetOpen) {
-            ModelSheet(
-                ui = ui,
-                onPick = { provider, model ->
-                    vm.selectProvider(provider, model)
-                    modelSheetOpen = false
-                },
-                onProviderFocus = vm::loadModelsFor,
-                onDismiss = { modelSheetOpen = false },
-            )
-        }
-    }
-}
+// The conversation surface, header, model/history/options sheets, and message rendering below are
+// the reusable building blocks of the unified Code space (see feature/code/CodeScreen.kt) — the old
+// standalone ChatScreen() scaffold was removed when Chat merged into Code.
 
 // ─────────────────────────────── Header ───────────────────────────────
 
 @Composable
-private fun CommandHeader(
+internal fun CommandHeader(
     ui: ChatUiState,
     engine: EngineState,
     onMenu: () -> Unit,
     onModelPicker: () -> Unit,
     onNewChat: () -> Unit,
+    onProjectPicker: (() -> Unit)? = null,
 ) {
+    val projectAware = ui.mode == ChatMode.BUILD || ui.mode == ChatMode.CLAUDE_CODE
     Row(
         Modifier
             .fillMaxWidth()
@@ -199,17 +137,36 @@ private fun CommandHeader(
     ) {
         LiquidIconButton(Icons.Outlined.Menu, "History", onMenu)
 
-        Column(Modifier.weight(1f)) {
+        Column(
+            Modifier
+                .weight(1f)
+                .then(
+                    if (projectAware && onProjectPicker != null) Modifier.clickable(onClick = onProjectPicker)
+                    else Modifier,
+                ),
+        ) {
             Text(
                 "Orion",
                 style = MaterialTheme.typography.titleLarge.copy(brush = Cosmos.TitleGradient),
                 fontWeight = FontWeight.Bold,
             )
-            val sub = buildString {
-                append(if (ui.mode == ChatMode.BUILD) "Build agent" else "Assistant")
-                ui.projectName?.let { append(" · $it") }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                val sub = buildString {
+                    append(
+                        when (ui.mode) {
+                            ChatMode.BUILD -> "Build agent"
+                            ChatMode.CLAUDE_CODE -> "Claude Code"
+                            ChatMode.CHAT -> "Assistant"
+                        },
+                    )
+                    append(" · ")
+                    append(ui.projectName ?: "no project")
+                }
+                Text(sub, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted, maxLines = 1)
+                if (projectAware && onProjectPicker != null) {
+                    Icon(Icons.Outlined.ExpandMore, "Switch project", tint = Cosmos.TextFaint, modifier = Modifier.size(12.dp))
+                }
             }
-            Text(sub, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted, maxLines = 1)
         }
 
         ModelPill(ui = ui, engine = engine, onClick = onModelPicker)
@@ -219,6 +176,10 @@ private fun CommandHeader(
 
 @Composable
 private fun ModelPill(ui: ChatUiState, engine: EngineState, onClick: () -> Unit) {
+    if (ui.mode == ChatMode.CLAUDE_CODE) {
+        ClaudeCodeModelPill(ui.claudeCode, onClick)
+        return
+    }
     val provider = ui.selectedProvider
     val ready = engine.status.name == "READY" || engine.status.name == "GENERATING"
     Row(
@@ -266,10 +227,51 @@ private fun ModelPill(ui: ChatUiState, engine: EngineState, onClick: () -> Unit)
     }
 }
 
+@Composable
+private fun ClaudeCodeModelPill(cc: ClaudeCodeUiState, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .liquidGlass(shape = Liquid.ShapePill, fillTopAlpha = 0.09f)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(if (cc.loggedIn) Cosmos.Green else Cosmos.Amber),
+        )
+        Column {
+            Text(
+                cc.model ?: "Default",
+                style = MaterialTheme.typography.labelMedium,
+                color = Cosmos.Text,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 110.dp),
+            )
+            Text(
+                "${cc.effort} effort",
+                style = MaterialTheme.typography.labelSmall,
+                color = Cosmos.TextMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.widthIn(max = 110.dp),
+            )
+        }
+        Icon(Icons.Outlined.ExpandMore, null, tint = Cosmos.TextMuted, modifier = Modifier.size(15.dp))
+    }
+}
+
 // ─────────────────────────────── Chat body ───────────────────────────────
 
+/** The conversation surface: transcript, stats, Claude Code setup banner, suggestions, and the
+ * input bar with its mode toggle (CHAT / BUILD / CLAUDE_CODE). Reused by the unified Code space
+ * (see feature/code/CodeScreen.kt) in both portrait and landscape; carries no header or panel tabs. */
 @Composable
-private fun ChatContent(
+internal fun ChatContent(
     ui: ChatUiState,
     messages: List<UiMessage>,
     vm: ChatViewModel,
@@ -277,8 +279,19 @@ private fun ChatContent(
 ) {
     val listState = rememberLazyListState()
     val bottomChrome = LocalBottomChromeHeight.current
+    // The floating nav pill is covered by the keyboard while it's up, so the extra clearance
+    // reserved for it becomes dead space between the input bar and the keyboard — only reserve it
+    // when the IME is actually hidden. WindowInsets.ime updates live as the keyboard animates in/out.
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
 
-    LaunchedEffect(messages.size, messages.lastOrNull()?.parts?.sumOf { it.text.length }) {
+    // Keys on parts.size + each tool's status (not just text length) — otherwise adding/updating a
+    // tool-call card (Claude Code executing Read/Write/Bash, etc.) never triggers a re-scroll, since a
+    // ToolView part's own `text` is empty. That silently hid the entire tool-call process from view
+    // whenever a turn was mostly tool calls with little running text alongside them.
+    val lastMessageShape = messages.lastOrNull()?.parts?.let { parts ->
+        parts.size to parts.sumOf { it.text.length + (it.tool?.status?.length ?: 0) }
+    }
+    LaunchedEffect(messages.size, lastMessageShape) {
         if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
     }
 
@@ -303,8 +316,19 @@ private fun ChatContent(
             ui.notice?.let { NoticeBanner(it, isError = false, Modifier.align(Alignment.BottomCenter)) }
         }
 
-        AnimatedVisibility(visible = ui.busy || ui.liveTokens > 0) {
-            StatsStrip(ui)
+        AnimatedVisibility(
+            visible = ui.busy || ui.liveTokens > 0 || (ui.mode == ChatMode.CLAUDE_CODE && ui.claudeCode.sessionCostUsd > 0),
+        ) {
+            if (ui.mode == ChatMode.CLAUDE_CODE) ClaudeCodeStatsStrip(ui) else StatsStrip(ui)
+        }
+
+        if (ui.mode == ChatMode.CLAUDE_CODE && (!ui.claudeCode.installed || !ui.claudeCode.loggedIn || ui.claudeCode.installProgress != null)) {
+            ClaudeCodeSetupBanner(
+                ui = ui,
+                onInstall = vm::installClaudeCodeRuntime,
+                onSignIn = vm::beginClaudeCodeLogin,
+                onSubmitCode = vm::submitClaudeCodeLoginCode,
+            )
         }
 
         if (messages.isEmpty()) {
@@ -317,11 +341,17 @@ private fun ChatContent(
             onSend = vm::send,
             onStop = vm::stop,
             onToggleMode = {
-                vm.setMode(if (ui.mode == ChatMode.CHAT) ChatMode.BUILD else ChatMode.CHAT)
+                vm.setMode(
+                    when (ui.mode) {
+                        ChatMode.CHAT -> ChatMode.BUILD
+                        ChatMode.BUILD -> ChatMode.CLAUDE_CODE
+                        ChatMode.CLAUDE_CODE -> ChatMode.CHAT
+                    },
+                )
             },
             modifier = Modifier
                 .padding(horizontal = 12.dp)
-                .padding(bottom = bottomChrome + 4.dp)
+                .padding(bottom = if (imeVisible) 4.dp else bottomChrome + 4.dp)
                 .imePadding(),
         )
     }
@@ -362,6 +392,47 @@ private fun StatsStrip(ui: ChatUiState) {
     }
 }
 
+/** Claude Code's own real usage/cost numbers (from the CLI's `result` event — see
+ * [com.legion.orion.claudecode.StreamJsonEventMapper.TurnUsage]), not an estimate: cumulative session
+ * cost on the left, last turn's input/output/cache token counts on the right. */
+@Composable
+private fun ClaudeCodeStatsStrip(ui: ChatUiState) {
+    val cc = ui.claudeCode
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (ui.busy) {
+            CircularProgressIndicator(
+                Modifier.size(11.dp),
+                color = Cosmos.Violet,
+                strokeWidth = 1.5.dp,
+            )
+        }
+        Text(
+            "$" + "%.4f".format(cc.sessionCostUsd),
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+            color = Cosmos.TextMuted,
+        )
+        Spacer(Modifier.weight(1f))
+        val cacheSuffix = if (cc.lastTurnCacheReadTokens > 0) " · cache ${compactTokenCount(cc.lastTurnCacheReadTokens)}" else ""
+        Text(
+            "in ${compactTokenCount(cc.lastTurnInputTokens)} · out ${compactTokenCount(cc.lastTurnOutputTokens)}$cacheSuffix",
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+            color = Cosmos.TextMuted,
+        )
+    }
+}
+
+private fun compactTokenCount(n: Int): String = when {
+    n >= 1_000_000 -> "%.1fM".format(n / 1_000_000.0)
+    n >= 1_000 -> "%.1fk".format(n / 1_000.0)
+    else -> n.toString()
+}
+
 @Composable
 private fun NoticeBanner(text: String, isError: Boolean, modifier: Modifier = Modifier) {
     Row(
@@ -381,6 +452,89 @@ private fun NoticeBanner(text: String, isError: Boolean, modifier: Modifier = Mo
             style = MaterialTheme.typography.labelMedium,
             color = if (isError) Cosmos.Red else Cosmos.Violet3,
         )
+    }
+}
+
+/**
+ * Guides one-time setup for the Claude Code mode: bundled-runtime install, then subscription
+ * sign-in. Only rendered while something needs the user's attention (see call site); once installed
+ * and signed in, disappears and the mode behaves like any other.
+ */
+@Composable
+private fun ClaudeCodeSetupBanner(
+    ui: ChatUiState,
+    onInstall: () -> Unit,
+    onSignIn: () -> Unit,
+    onSubmitCode: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cc = ui.claudeCode
+    val context = LocalContext.current
+    var pastedCode by remember { mutableStateOf("") }
+
+    Column(
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .liquidGlass(shape = Liquid.ShapeSmall, fillTopAlpha = 0.1f)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Set up Claude Code", style = MaterialTheme.typography.labelLarge, color = Cosmos.Text)
+        when {
+            cc.installProgress != null -> {
+                Text(cc.installProgress, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted)
+            }
+            !cc.installed -> {
+                Text(
+                    "Runs the real Claude Code CLI on-device, billed to your Claude subscription — " +
+                        "not pay-per-token API. One-time install, about 150MB.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
+                LiquidButton("Install", onClick = onInstall, compact = true)
+            }
+            cc.loginUrl != null -> {
+                Text(
+                    "Open this link, sign in with your Claude account, then paste back whatever code the page shows.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
+                LiquidButton(
+                    "Open sign-in page",
+                    compact = true,
+                    onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(cc.loginUrl))) } },
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BasicTextField(
+                        value = pastedCode,
+                        onValueChange = { pastedCode = it },
+                        modifier = Modifier
+                            .weight(1f)
+                            .liquidGlass(shape = Liquid.ShapeSmall, fillTopAlpha = 0.08f)
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        textStyle = MaterialTheme.typography.bodySmall.copy(color = Cosmos.Text),
+                        cursorBrush = SolidColor(Cosmos.Violet),
+                        decorationBox = { inner ->
+                            if (pastedCode.isEmpty()) {
+                                Text("Paste code…", style = MaterialTheme.typography.bodySmall, color = Cosmos.TextFaint)
+                            }
+                            inner()
+                        },
+                    )
+                    LiquidButton("Submit", compact = true, onClick = { onSubmitCode(pastedCode); pastedCode = "" })
+                }
+            }
+            !cc.loggedIn -> {
+                Text(
+                    "Sign in with your Claude Pro, Max, or Team subscription — no separate API billing.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
+                LiquidButton(if (cc.loginBusy) "Starting…" else "Sign in", compact = true, onClick = onSignIn)
+            }
+        }
+        cc.loginError?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Cosmos.Red) }
     }
 }
 
@@ -419,14 +573,21 @@ private fun EmptyChat(mode: ChatMode) {
         }
         Spacer(Modifier.height(18.dp))
         Text(
-            if (mode == ChatMode.BUILD) "What should we build?" else "Ask Orion anything",
+            when (mode) {
+                ChatMode.BUILD -> "What should we build?"
+                ChatMode.CLAUDE_CODE -> "What should Claude Code do?"
+                ChatMode.CHAT -> "Ask Orion anything"
+            },
             style = MaterialTheme.typography.headlineSmall.copy(brush = Cosmos.TitleGradient),
             fontWeight = FontWeight.SemiBold,
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            if (mode == ChatMode.BUILD) "On-device agent with tools, snapshots and preview"
-            else "Local-first. Your words never have to leave the phone.",
+            when (mode) {
+                ChatMode.BUILD -> "On-device agent with tools, snapshots and preview"
+                ChatMode.CLAUDE_CODE -> "The real Claude Code CLI, billed to your subscription"
+                ChatMode.CHAT -> "Local-first. Your words never have to leave the phone."
+            },
             style = MaterialTheme.typography.bodySmall,
             color = Cosmos.TextMuted,
         )
@@ -478,19 +639,19 @@ private fun InputBar(
         verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        val buildMode = ui.mode == ChatMode.BUILD
+        val accentMode = ui.mode != ChatMode.CHAT
         Row(
             Modifier
                 .clip(Liquid.ShapePill)
                 .background(
-                    if (buildMode) Brush.verticalGradient(
+                    if (accentMode) Brush.verticalGradient(
                         listOf(Cosmos.Violet.copy(alpha = 0.35f), Cosmos.Violet2.copy(alpha = 0.25f)),
                     ) else SolidColor(Color.Transparent),
                     Liquid.ShapePill,
                 )
                 .border(
                     1.dp,
-                    if (buildMode) Cosmos.Violet.copy(alpha = 0.55f) else Cosmos.Hairline,
+                    if (accentMode) Cosmos.Violet.copy(alpha = 0.55f) else Cosmos.Hairline,
                     Liquid.ShapePill,
                 )
                 .clickable { haptic(); onToggleMode() }
@@ -499,15 +660,23 @@ private fun InputBar(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Icon(
-                if (buildMode) Icons.Outlined.Build else Icons.Outlined.ChatBubbleOutline,
+                when (ui.mode) {
+                    ChatMode.BUILD -> Icons.Outlined.Build
+                    ChatMode.CLAUDE_CODE -> Icons.Outlined.Terminal
+                    ChatMode.CHAT -> Icons.Outlined.ChatBubbleOutline
+                },
                 contentDescription = "Mode",
-                tint = if (buildMode) Cosmos.Violet3 else Cosmos.TextMuted,
+                tint = if (accentMode) Cosmos.Violet3 else Cosmos.TextMuted,
                 modifier = Modifier.size(15.dp),
             )
             Text(
-                if (buildMode) "Build" else "Chat",
+                when (ui.mode) {
+                    ChatMode.BUILD -> "Build"
+                    ChatMode.CLAUDE_CODE -> "Claude Code"
+                    ChatMode.CHAT -> "Chat"
+                },
                 style = MaterialTheme.typography.labelSmall,
-                color = if (buildMode) Cosmos.Violet3 else Cosmos.TextMuted,
+                color = if (accentMode) Cosmos.Violet3 else Cosmos.TextMuted,
             )
         }
 
@@ -781,19 +950,24 @@ private fun ToolCard(tool: ToolView, onUndo: (ToolView) -> Unit) {
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                tool.result?.takeIf { it.isNotBlank() }?.let { result ->
-                    Text(
-                        result,
-                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFamily),
-                        color = Cosmos.TextDim,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0x66000000))
-                            .padding(9.dp),
-                        maxLines = 24,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                val diff = tool.diff
+                if (diff != null) {
+                    DiffView(diff)
+                } else {
+                    tool.result?.takeIf { it.isNotBlank() }?.let { result ->
+                        Text(
+                            result,
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFamily),
+                            color = Cosmos.TextDim,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0x66000000))
+                                .padding(9.dp),
+                            maxLines = 24,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
                 if (tool.snapshotRef != null) {
                     Row(
@@ -813,11 +987,44 @@ private fun ToolCard(tool: ToolView, onUndo: (ToolView) -> Unit) {
     }
 }
 
+/** Renders a unified diff body (as produced by [com.legion.orion.claudecode.StreamJsonEventMapper])
+ * with +/- line coloring, matching the "diff viewer" panel real Claude Code shows for edits. */
+@Composable
+private fun DiffView(diff: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0x66000000))
+            .padding(vertical = 6.dp),
+    ) {
+        diff.lineSequence().take(200).forEach { line ->
+            val (color, bg) = when {
+                line.startsWith("@@") -> Cosmos.Violet3 to Color.Transparent
+                line.startsWith("+") -> Cosmos.Green to Color(0x1F2ECC71)
+                line.startsWith("-") -> Cosmos.Red to Color(0x1FFF5252)
+                else -> Cosmos.TextDim to Color.Transparent
+            }
+            Text(
+                line,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFamily),
+                color = color,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(bg)
+                    .padding(horizontal = 9.dp, vertical = 1.dp),
+            )
+        }
+    }
+}
+
 // ─────────────────────────────── Sheets ───────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HistorySheet(
+internal fun HistorySheet(
     chats: List<ChatEntity>,
     activeId: String?,
     onOpen: (ChatEntity) -> Unit,
@@ -891,8 +1098,11 @@ private fun HistorySheet(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Icon(
-                            if (chat.mode == "build" || chat.mode == "agent") Icons.Outlined.Build
-                            else Icons.Outlined.ChatBubbleOutline,
+                            when (chat.mode) {
+                                "build", "agent" -> Icons.Outlined.Build
+                                "claude_code" -> Icons.Outlined.Terminal
+                                else -> Icons.Outlined.ChatBubbleOutline
+                            },
                             null,
                             tint = if (chat.id == activeId) Cosmos.Violet3 else Cosmos.TextMuted,
                             modifier = Modifier.size(15.dp),
@@ -921,9 +1131,95 @@ private fun HistorySheet(
     }
 }
 
+/** Model/effort/permission-mode picker for Claude Code mode — mirrors [ModelSheet]'s look, but these
+ * three values map directly to `claude` CLI flags (see `ClaudeCodeProcess`) rather than an Orion
+ * `ProviderEntity`, so it's a separate, simpler sheet. Changing any value restarts the current
+ * project's live Claude Code process (with --resume) via `ChatViewModel.setClaudeCodeOptions`. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ModelSheet(
+internal fun ClaudeCodeOptionsSheet(
+    ui: ChatUiState,
+    onPick: (model: String?, effort: String, permissionMode: String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val cc = ui.claudeCode
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xF20A0618),
+        dragHandle = null,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(
+                "Claude Code options",
+                style = MaterialTheme.typography.titleMedium.copy(brush = Cosmos.TitleGradient),
+                fontWeight = FontWeight.Bold,
+            )
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Model", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ClaudeCodeUiState.MODEL_OPTIONS.forEach { model ->
+                        LiquidChip(
+                            text = model ?: "Default",
+                            selected = cc.model == model,
+                            onClick = { onPick(model, cc.effort, cc.permissionMode) },
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Effort", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ClaudeCodeUiState.EFFORT_OPTIONS.forEach { effort ->
+                        LiquidChip(
+                            text = effort,
+                            selected = cc.effort == effort,
+                            onClick = { onPick(cc.model, effort, cc.permissionMode) },
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Permission mode", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    ClaudeCodeUiState.PERMISSION_MODE_OPTIONS.forEach { mode ->
+                        LiquidChip(
+                            text = mode,
+                            selected = cc.permissionMode == mode,
+                            onClick = { onPick(cc.model, cc.effort, mode) },
+                        )
+                    }
+                }
+                Text(
+                    "bypassPermissions is recommended — it's the only mode that runs Bash commands " +
+                        "(builds, dev servers, etc.) unattended. Other modes may block or hang waiting " +
+                        "for an approval no one is here to give.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextFaint,
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ModelSheet(
     ui: ChatUiState,
     onPick: (ProviderEntity, String) -> Unit,
     onProviderFocus: (ProviderEntity) -> Unit,

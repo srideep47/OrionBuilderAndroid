@@ -171,3 +171,12 @@ interface ChatFtsDao {
     @Query("SELECT messageId FROM chat_fts WHERE chat_fts MATCH :query")
     suspend fun search(query: String): List<String>
 }
+
+@Dao
+interface ClaudeCodeSessionDao {
+    @Query("SELECT * FROM claude_code_sessions WHERE projectId = :projectId")
+    suspend fun get(projectId: String): ClaudeCodeSessionEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(session: ClaudeCodeSessionEntity)
+}

@@ -2,6 +2,7 @@ package com.legion.orion.feature.media
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,7 +12,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -19,6 +22,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Movie
+import androidx.compose.material.icons.outlined.MusicNote
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,7 +63,14 @@ import com.legion.orion.core.design.LiquidPanel
 import com.legion.orion.core.design.LiquidProgress
 import com.legion.orion.core.design.LocalBottomChromeHeight
 import com.legion.orion.core.design.liquidGlass
+import com.legion.orion.data.media.RemoteCatalog
+import com.legion.orion.data.media.ShareDownloadState
+import com.legion.orion.infra.p2p.SharedMediaItem
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextOverflow
 import java.io.File
+import java.util.Locale
 import kotlinx.coroutines.launch
 
 /** Media pane — queue image/video/audio jobs to peers and browse results. */
@@ -325,13 +344,13 @@ private fun Composer(ui: MediaUiState, vm: MediaViewModel) {
             }
             if (!ui.hasComputePeer) {
                 Text(
-                    "⚠ No compute peer online. The job will queue until a friend with spare compute connects.",
+                    "⚠ No compute peer online. Generation runs on a trusted peer (e.g. your desktop) — it never runs on this phone. The job waits until one connects.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Cosmos.Amber,
                 )
             }
             LiquidButton(
-                "Queue to peers",
+                "Generate on a peer",
                 onClick = vm::queue,
                 enabled = ui.prompt.isNotBlank(),
                 modifier = Modifier.fillMaxWidth(),
@@ -393,4 +412,163 @@ private fun stateBadge(state: String) = when (state) {
     "queued" -> CosmosBadge("Queued", BadgeTone.Amber)
     "failed" -> CosmosBadge("Failed", BadgeTone.Red)
     else -> CosmosBadge(state, BadgeTone.Neutral)
+}
+
+// ─────────────────────────── Shared media (network) ───────────────────────────
+
+/** Shared pane — browse and download media trusted peers are sharing on the network. */
+@Composable
+fun SharedMediaPane(vm: MediaViewModel = hiltViewModel()) {
+    val catalogs by vm.catalogs.collectAsStateWithLifecycle()
+    val downloads by vm.downloads.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) { vm.refreshShared() }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start = 16.dp, end = 16.dp, top = 4.dp,
+            bottom = LocalBottomChromeHeight.current + 8.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Shared on the network", style = MaterialTheme.typography.titleMedium, color = Cosmos.Text)
+                    Text(
+                        "Media your trusted peers are sharing — your gallery is shared back automatically.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Cosmos.TextMuted,
+                    )
+                }
+                LiquidButton(
+                    "Refresh",
+                    onClick = vm::refreshShared,
+                    style = LiquidButtonStyle.Glass,
+                    compact = true,
+                    icon = Icons.Outlined.Refresh,
+                )
+            }
+        }
+
+        if (catalogs.isEmpty()) {
+            item { EmptySharedMedia() }
+        }
+
+        catalogs.forEach { cat ->
+            item(key = "hdr-${cat.peerKey}") {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(Icons.Outlined.Folder, null, tint = Cosmos.Violet3, modifier = Modifier.size(16.dp))
+                    Text(
+                        cat.displayName,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Cosmos.Text,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    CosmosBadge("${cat.items.size}", BadgeTone.Neutral)
+                }
+            }
+            items(cat.items, key = { "${cat.peerKey}/${it.fileName}" }) { item ->
+                SharedItemCard(cat.peerKey, item, downloads["${cat.peerKey}/${item.fileName}"], vm)
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptySharedMedia() {
+    LiquidPanel(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(Icons.Outlined.CloudOff, null, tint = Cosmos.TextMuted, modifier = Modifier.size(20.dp))
+            Text(
+                "No shared media yet. When a trusted peer (e.g. your desktop) shares media, it appears here. Tap Refresh after connecting.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Cosmos.TextMuted,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SharedItemCard(
+    peerKey: String,
+    item: SharedMediaItem,
+    dl: ShareDownloadState?,
+    vm: MediaViewModel,
+) {
+    LiquidPanel(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                Modifier
+                    .size(54.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0x1FA88CFF)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (!item.thumbnail.isNullOrBlank()) {
+                    AsyncImage(
+                        model = item.thumbnail,
+                        contentDescription = item.prompt,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Icon(kindIcon(item.kind), null, tint = Cosmos.Violet3, modifier = Modifier.size(22.dp))
+                }
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    item.prompt?.takeIf { it.isNotBlank() } ?: item.fileName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Cosmos.Text,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    "${item.kind.uppercase()} · ${formatBytes(item.sizeBytes)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
+                if (dl?.status == "downloading") {
+                    val frac = if (dl.total > 0) (dl.received.toFloat() / dl.total).coerceIn(0f, 1f) else 0f
+                    Spacer(Modifier.height(4.dp))
+                    LiquidProgress(progress = frac, height = 3.dp)
+                }
+            }
+            when (dl?.status) {
+                "done" -> CosmosBadge("Saved", BadgeTone.Green)
+                "downloading" -> CircularProgressIndicator(Modifier.size(18.dp), color = Cosmos.Violet, strokeWidth = 2.dp)
+                "error" -> LiquidButton("Retry", onClick = { vm.downloadShared(peerKey, item) }, style = LiquidButtonStyle.Glass, compact = true)
+                else -> LiquidButton("Get", onClick = { vm.downloadShared(peerKey, item) }, compact = true, icon = Icons.Outlined.Download)
+            }
+        }
+    }
+}
+
+private fun kindIcon(kind: String): ImageVector = when (kind.lowercase()) {
+    "video" -> Icons.Outlined.Movie
+    "audio", "music" -> Icons.Outlined.MusicNote
+    else -> Icons.Outlined.Image
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes <= 0) return "—"
+    val units = arrayOf("B", "KB", "MB", "GB")
+    var v = bytes.toDouble()
+    var i = 0
+    while (v >= 1024 && i < units.lastIndex) { v /= 1024; i++ }
+    return if (i == 0) "$bytes B" else String.format(Locale.US, "%.1f %s", v, units[i])
 }
