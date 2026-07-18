@@ -14,14 +14,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -64,9 +67,9 @@ fun OrionApp() {
     val currentDest = backStack?.destination
     val hazeState = remember { HazeState() }
 
-    // Floating bar: ~56dp pill + 14dp bottom margin + 8dp breathing room.
+    // Floating bar: icon + persistent label, bottom margin, and breathing room.
     val navBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val chromeHeight = 56.dp + 14.dp + 8.dp + navBarInset
+    val chromeHeight = 62.dp + 14.dp + 8.dp + navBarInset
 
     CompositionLocalProvider(
         LocalHazeState provides hazeState,
@@ -99,6 +102,7 @@ fun OrionApp() {
                 },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
+                    .widthIn(max = 560.dp)
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .padding(horizontal = 24.dp)
                     .padding(bottom = 14.dp),
@@ -109,8 +113,8 @@ fun OrionApp() {
 
 /**
  * iOS 26 floating Liquid Glass tab bar: a blurred capsule hovering over content.
- * The selected tab grows into an icon+label pill with a violet lens; others are
- * icon-only. Real backdrop blur via haze on Android 12+.
+ * Every destination keeps its label visible so the shell remains self-explanatory; the selected
+ * tab receives the violet lens. Real backdrop blur via haze on Android 12+.
  */
 @Composable
 private fun LiquidTabBar(
@@ -120,6 +124,7 @@ private fun LiquidTabBar(
 ) {
     Row(
         modifier
+            .fillMaxWidth()
             .liquidGlass(
                 shape = Liquid.ShapePill,
                 fillTopAlpha = 0.12f,
@@ -133,13 +138,18 @@ private fun LiquidTabBar(
     ) {
         TopDestination.entries.forEach { dest ->
             val selected = current?.hierarchy?.any { it.route == dest.route } == true
-            TabItem(dest = dest, selected = selected, onClick = { onNavigate(dest) })
+            TabItem(
+                dest = dest,
+                selected = selected,
+                onClick = { onNavigate(dest) },
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }
 
 @Composable
-private fun TabItem(dest: TopDestination, selected: Boolean, onClick: () -> Unit) {
+private fun TabItem(dest: TopDestination, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val haptic = rememberHaptic()
     val interaction = remember { MutableInteractionSource() }
     val lens by animateFloatAsState(
@@ -148,8 +158,8 @@ private fun TabItem(dest: TopDestination, selected: Boolean, onClick: () -> Unit
         label = "lens",
     )
 
-    Row(
-        Modifier
+    Column(
+        modifier
             .clip(Liquid.ShapePill)
             .background(
                 Brush.verticalGradient(
@@ -169,9 +179,9 @@ private fun TabItem(dest: TopDestination, selected: Boolean, onClick: () -> Unit
                 if (!selected) haptic()
                 onClick()
             }
-            .padding(horizontal = 13.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            .padding(horizontal = 6.dp, vertical = 7.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Icon(
             if (selected) dest.activeIcon else dest.icon,
@@ -185,18 +195,12 @@ private fun TabItem(dest: TopDestination, selected: Boolean, onClick: () -> Unit
                     scaleY = s
                 },
         )
-        AnimatedVisibility(
-            visible = selected,
-            enter = fadeIn() + expandHorizontally(),
-            exit = fadeOut() + shrinkHorizontally(),
-        ) {
-            Text(
-                dest.label,
-                color = Color.White,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-            )
-        }
+        Text(
+            dest.label,
+            color = if (selected) Color.White else Cosmos.TextMuted,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            maxLines = 1,
+        )
     }
 }

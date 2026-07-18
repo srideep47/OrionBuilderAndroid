@@ -56,6 +56,7 @@ import com.legion.orion.core.design.CosmosBadge
 import com.legion.orion.core.design.LiquidButton
 import com.legion.orion.core.design.LiquidChip
 import com.legion.orion.core.design.LiquidPanel
+import com.legion.orion.core.design.LiquidSegmented
 import com.legion.orion.core.design.LocalBottomChromeHeight
 import com.legion.orion.core.design.MonoFamily
 import com.legion.orion.core.design.liquidGlass
@@ -84,6 +85,7 @@ fun DevToolPanel(
     vm: WorkspaceViewModel = hiltViewModel(),
     modifier: Modifier = Modifier,
     onSwitchToTerminal: (() -> Unit)? = null,
+    onOpenFileInEditor: ((String) -> Unit)? = null,
 ) {
     val projects by vm.projects.collectAsStateWithLifecycle()
     val buildJobs by vm.buildJobs.collectAsStateWithLifecycle()
@@ -91,6 +93,8 @@ fun DevToolPanel(
     val diagnostics by vm.diagnostics.collectAsStateWithLifecycle()
     val activeProjectId by vm.activeProjectId.collectAsStateWithLifecycle()
     val git by vm.git.collectAsStateWithLifecycle()
+    val gitAccounts by vm.gitAccounts.collectAsStateWithLifecycle()
+    val githubLogin by vm.githubLogin.collectAsStateWithLifecycle()
     val terminalOutput by vm.terminalOutput.collectAsStateWithLifecycle()
     val terminalRunning by vm.terminalRunning.collectAsStateWithLifecycle()
     val env by vm.env.collectAsStateWithLifecycle()
@@ -108,10 +112,19 @@ fun DevToolPanel(
     Box(modifier.fillMaxSize()) {
         when (tool) {
             DevTool.FILES -> FileManagerScreen(
+                onOpenFile = onOpenFileInEditor,
                 onOpenTerminalHere = { relativePath ->
                     vm.openTerminalAt(relativePath)
                     onSwitchToTerminal?.invoke()
                 },
+                hasActiveProjectGit = activeProjectId != null && git.isRepo,
+                cloneProgress = git.cloneProgress,
+                onClone = vm::requestClone,
+                onRetryClone = vm::retryClone,
+                onDismissClone = vm::dismissCloneProgress,
+                onPush = vm::requestPush,
+                onPull = vm::requestPull,
+                onFetch = vm::requestFetch,
             )
             DevTool.EDITOR -> EditorScreen()
             DevTool.PREVIEW -> PreviewScreen()
@@ -119,11 +132,30 @@ fun DevToolPanel(
                 state = git,
                 hasActiveProject = activeProjectId != null,
                 runtimeReady = vm.gitRuntimeReady(),
-                onClone = vm::cloneRepo,
-                onPush = vm::push,
-                onPull = vm::pull,
+                accounts = gitAccounts,
+                githubLogin = githubLogin,
+                onClone = vm::requestClone,
+                onPush = vm::requestPush,
+                onPull = vm::requestPull,
+                onFetch = vm::requestFetch,
                 onCheckout = vm::checkoutBranch,
-                onSaveToken = vm::saveGitToken,
+                onInit = vm::initRepository,
+                onRefresh = vm::refreshGitStatus,
+                onStageAll = vm::stageAll,
+                onUnstageAll = vm::unstageAll,
+                onStageFile = vm::stageFile,
+                onUnstageFile = vm::unstageFile,
+                onCommit = vm::commitChanges,
+                onShowDiff = vm::showDiff,
+                onClearDiff = vm::clearDiff,
+                onCreateBranch = vm::createBranch,
+                onDeleteBranch = vm::deleteBranch,
+                onAddRemote = vm::addRemote,
+                onRemoveRemote = vm::removeRemote,
+                onAddAccount = vm::addGitAccount,
+                onRemoveAccount = vm::removeGitAccount,
+                onSignInWithGitHub = vm::beginGitHubLogin,
+                onDismissGitHubLogin = vm::dismissGitHubLogin,
                 onGenerateSshKey = vm::generateSshKey,
             )
             DevTool.ENV -> EnvPanel(
@@ -146,6 +178,16 @@ fun DevToolPanel(
                 diagnostics = diagnostics,
                 onRefresh = vm::refreshDiagnostics,
                 onClear = vm::clearDiagnostics,
+            )
+        }
+        // Shared between the Git tab's own push/pull/fetch/clone buttons and the file manager's
+        // long-press git menu — only ever populated (see WorkspaceViewModel.withAccountGate) when
+        // 2+ accounts exist, so this dialog simply never appears with 0 or 1.
+        if (git.pendingAction != null) {
+            GitAccountPickerDialog(
+                accounts = gitAccounts,
+                onPick = vm::resolvePendingAction,
+                onDismiss = vm::cancelPendingAction,
             )
         }
     }
@@ -265,7 +307,12 @@ private fun TerminalPanel(
     val scrollState = rememberScrollState()
     LaunchedEffect(output) { scrollState.animateScrollTo(scrollState.maxValue) }
 
-    Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+    Column(
+        modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp)
+            .padding(bottom = LocalBottomChromeHeight.current),
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
             CosmosBadge(if (running) "Running" else "Stopped", if (running) BadgeTone.Green else BadgeTone.Red)
             Modifier.weight(1f).let { Row(it) {} }
@@ -327,18 +374,37 @@ private fun GitPanel(
     state: GitPanelState,
     hasActiveProject: Boolean,
     runtimeReady: Boolean,
-    onClone: (url: String, tokenHost: String?, name: String?) -> Unit,
+    accounts: List<com.legion.orion.core.datastore.GitAccount>,
+    githubLogin: GitHubLoginState,
+    onClone: (url: String, name: String?) -> Unit,
     onPush: () -> Unit,
     onPull: () -> Unit,
+    onFetch: () -> Unit,
     onCheckout: (String) -> Unit,
-    onSaveToken: (host: String, token: String) -> Unit,
+    onInit: () -> Unit,
+    onRefresh: () -> Unit,
+    onStageAll: () -> Unit,
+    onUnstageAll: () -> Unit,
+    onStageFile: (String) -> Unit,
+    onUnstageFile: (String) -> Unit,
+    onCommit: (String, String, String) -> Unit,
+    onShowDiff: (String?, Boolean) -> Unit,
+    onClearDiff: () -> Unit,
+    onCreateBranch: (String) -> Unit,
+    onDeleteBranch: (String) -> Unit,
+    onAddRemote: (String, String) -> Unit,
+    onRemoveRemote: (String) -> Unit,
+    onAddAccount: (label: String, host: String, username: String?, pat: String) -> Unit,
+    onRemoveAccount: (String) -> Unit,
+    onSignInWithGitHub: () -> Unit,
+    onDismissGitHubLogin: () -> Unit,
     onGenerateSshKey: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val clipboard = LocalClipboardManager.current
     var cloneUrl by remember { mutableStateOf("") }
-    var tokenHost by remember { mutableStateOf("") }
-    var tokenValue by remember { mutableStateOf("") }
+    var section by rememberSaveable { mutableIntStateOf(0) }
+    var repositorySection by rememberSaveable { mutableIntStateOf(0) }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -362,6 +428,15 @@ private fun GitPanel(
             return@LazyColumn
         }
 
+        item {
+            LiquidSegmented(
+                options = listOf("Repository", "Accounts", "SSH"),
+                selectedIndex = section,
+                onSelect = { section = it },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
         state.error?.let { err ->
             item {
                 LiquidPanel(modifier = Modifier.fillMaxWidth()) {
@@ -375,7 +450,7 @@ private fun GitPanel(
             }
         }
 
-        if (hasActiveProject && state.isRepo) {
+        if (section == 0 && hasActiveProject && state.isRepo) {
             item {
                 LiquidPanel(modifier = Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -395,6 +470,7 @@ private fun GitPanel(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             LiquidButton("Pull", onClick = onPull, enabled = !state.busy, compact = true)
                             LiquidButton("Push", onClick = onPush, enabled = !state.busy, compact = true)
+                            LiquidButton("Fetch", onClick = onFetch, enabled = !state.busy, compact = true)
                         }
                         if (state.status?.isDirty == true) {
                             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -407,36 +483,27 @@ private fun GitPanel(
                     }
                 }
             }
-            if (state.branches.isNotEmpty()) {
-                item {
-                    LiquidPanel(modifier = Modifier.fillMaxWidth()) {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Branches", style = MaterialTheme.typography.titleMedium, color = Cosmos.Text)
-                            Row(
-                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            ) {
-                                state.branches.forEach { b ->
-                                    LiquidChip(b, selected = b == state.status?.branch, onClick = { onCheckout(b) })
-                                }
-                            }
-                        }
-                    }
-                }
+            item {
+                GitRepositoryTools(
+                    state = state,
+                    section = repositorySection,
+                    onSection = { repositorySection = it },
+                    onRefresh = onRefresh,
+                    onStageAll = onStageAll,
+                    onUnstageAll = onUnstageAll,
+                    onStageFile = onStageFile,
+                    onUnstageFile = onUnstageFile,
+                    onCommit = onCommit,
+                    onShowDiff = onShowDiff,
+                    onClearDiff = onClearDiff,
+                    onCheckout = onCheckout,
+                    onCreateBranch = onCreateBranch,
+                    onDeleteBranch = onDeleteBranch,
+                    onAddRemote = onAddRemote,
+                    onRemoveRemote = onRemoveRemote,
+                )
             }
-            if (state.remotes.isNotEmpty()) {
-                item {
-                    LiquidPanel(modifier = Modifier.fillMaxWidth()) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("Remotes", style = MaterialTheme.typography.titleMedium, color = Cosmos.Text)
-                            state.remotes.forEach {
-                                Text(it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFamily), color = Cosmos.TextDim)
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
+        } else if (section == 0) {
             item {
                 LiquidPanel(modifier = Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -449,44 +516,30 @@ private fun GitPanel(
                         GitTextField(cloneUrl, { cloneUrl = it }, "https://github.com/owner/repo.git")
                         LiquidButton(
                             if (state.busy) "Cloning…" else "Clone",
-                            onClick = {
-                                val host = Regex("https://([^/]+)/").find(cloneUrl)?.groupValues?.get(1)
-                                onClone(cloneUrl, host, null)
-                            },
+                            onClick = { onClone(cloneUrl, null) },
                             enabled = !state.busy && cloneUrl.isNotBlank(),
                             compact = true,
                         )
+                        if (hasActiveProject) {
+                            LiquidButton("Initialize active project", onClick = onInit, enabled = !state.busy, compact = true)
+                        }
                     }
                 }
             }
         }
 
-        item {
-            LiquidPanel(modifier = Modifier.fillMaxWidth()) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("HTTPS access token", style = MaterialTheme.typography.titleMedium, color = Cosmos.Text)
-                    Text(
-                        "Saved per host, embedded into the remote URL on clone — never shown again after saving.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Cosmos.TextMuted,
-                    )
-                    GitTextField(tokenHost, { tokenHost = it }, "github.com")
-                    GitTextField(tokenValue, { tokenValue = it }, "personal access token", obscure = true)
-                    LiquidButton(
-                        "Save token",
-                        compact = true,
-                        onClick = {
-                            if (tokenHost.isNotBlank() && tokenValue.isNotBlank()) {
-                                onSaveToken(tokenHost.trim(), tokenValue.trim())
-                                tokenValue = ""
-                            }
-                        },
-                    )
-                }
-            }
+        if (section == 1) item {
+            GitAccountsPanel(
+                accounts = accounts,
+                githubLogin = githubLogin,
+                onAdd = onAddAccount,
+                onRemove = onRemoveAccount,
+                onSignInWithGitHub = onSignInWithGitHub,
+                onDismissGitHubLogin = onDismissGitHubLogin,
+            )
         }
 
-        item {
+        if (section == 2) item {
             LiquidPanel(modifier = Modifier.fillMaxWidth()) {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -522,7 +575,172 @@ private fun GitPanel(
 }
 
 @Composable
-private fun GitTextField(value: String, onValueChange: (String) -> Unit, placeholder: String, obscure: Boolean = false) {
+private fun GitRepositoryTools(
+    state: GitPanelState,
+    section: Int,
+    onSection: (Int) -> Unit,
+    onRefresh: () -> Unit,
+    onStageAll: () -> Unit,
+    onUnstageAll: () -> Unit,
+    onStageFile: (String) -> Unit,
+    onUnstageFile: (String) -> Unit,
+    onCommit: (String, String, String) -> Unit,
+    onShowDiff: (String?, Boolean) -> Unit,
+    onClearDiff: () -> Unit,
+    onCheckout: (String) -> Unit,
+    onCreateBranch: (String) -> Unit,
+    onDeleteBranch: (String) -> Unit,
+    onAddRemote: (String, String) -> Unit,
+    onRemoveRemote: (String) -> Unit,
+) {
+    var commitMessage by remember { mutableStateOf("") }
+    var authorName by remember(state.identity.name) { mutableStateOf(state.identity.name.orEmpty()) }
+    var authorEmail by remember(state.identity.email) { mutableStateOf(state.identity.email.orEmpty()) }
+    var branchName by remember { mutableStateOf("") }
+    var remoteName by remember { mutableStateOf("origin") }
+    var remoteUrl by remember { mutableStateOf("") }
+    val status = state.status
+
+    LiquidPanel(modifier = Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            LiquidSegmented(
+                options = listOf("Changes", "History", "Branches", "Remotes"),
+                selectedIndex = section,
+                onSelect = onSection,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            when (section) {
+                0 -> {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    ) {
+                        LiquidButton("Refresh", onClick = onRefresh, enabled = !state.busy, compact = true)
+                        LiquidButton("Stage all", onClick = onStageAll, enabled = !state.busy && status?.unstaged?.isNotEmpty() == true, compact = true)
+                        LiquidButton("Unstage all", onClick = onUnstageAll, enabled = !state.busy && status?.staged?.isNotEmpty() == true, compact = true)
+                        LiquidButton("Working diff", onClick = { onShowDiff(null, false) }, enabled = !state.busy, compact = true)
+                        LiquidButton("Staged diff", onClick = { onShowDiff(null, true) }, enabled = !state.busy, compact = true)
+                    }
+                    status?.conflicts?.takeIf { it.isNotEmpty() }?.let { conflicts ->
+                        Text("${conflicts.size} merge conflict(s) require resolution", color = Cosmos.Red, style = MaterialTheme.typography.labelMedium)
+                    }
+                    Text("Working tree (${status?.unstaged?.size ?: 0})", color = Cosmos.TextMuted, style = MaterialTheme.typography.labelMedium)
+                    status?.unstaged.orEmpty().take(100).forEach { file ->
+                        GitFileRow(file, staged = false, onAction = { onStageFile(file.path) }, onDiff = { onShowDiff(file.path, false) })
+                    }
+                    if (status?.unstaged.isNullOrEmpty()) Text("No unstaged changes", color = Cosmos.TextFaint, style = MaterialTheme.typography.bodySmall)
+
+                    Text("Staged (${status?.staged?.size ?: 0})", color = Cosmos.TextMuted, style = MaterialTheme.typography.labelMedium)
+                    status?.staged.orEmpty().take(100).forEach { file ->
+                        GitFileRow(file, staged = true, onAction = { onUnstageFile(file.path) }, onDiff = { onShowDiff(file.path, true) })
+                    }
+                    if (status?.staged.isNullOrEmpty()) Text("Nothing staged for commit", color = Cosmos.TextFaint, style = MaterialTheme.typography.bodySmall)
+
+                    Text("Commit", color = Cosmos.Text, style = MaterialTheme.typography.titleSmall)
+                    GitTextField(commitMessage, { commitMessage = it }, "Commit message")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Box(Modifier.weight(1f)) { GitTextField(authorName, { authorName = it }, "Author name") }
+                        Box(Modifier.weight(1f)) { GitTextField(authorEmail, { authorEmail = it }, "Author email") }
+                    }
+                    LiquidButton(
+                        "Commit staged changes",
+                        onClick = { onCommit(commitMessage, authorName, authorEmail); commitMessage = "" },
+                        enabled = !state.busy && status?.staged?.isNotEmpty() == true && commitMessage.isNotBlank(),
+                        compact = true,
+                    )
+                    if (state.diff.isNotBlank()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                (if (state.diffStaged) "Staged" else "Working") + " diff" + (state.diffPath?.let { " · $it" } ?: ""),
+                                color = Cosmos.Text,
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.weight(1f),
+                            )
+                            LiquidChip("Close", onClick = onClearDiff)
+                        }
+                        Text(
+                            state.diff,
+                            color = Cosmos.TextDim,
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFamily),
+                            maxLines = 240,
+                        )
+                    }
+                }
+                1 -> {
+                    Text("Commit history", color = Cosmos.Text, style = MaterialTheme.typography.titleSmall)
+                    if (state.commits.isEmpty()) Text("No commits yet", color = Cosmos.TextFaint, style = MaterialTheme.typography.bodySmall)
+                    state.commits.take(80).forEach { commit ->
+                        Column(
+                            Modifier.fillMaxWidth().liquidGlass(shape = RoundedCornerShape(10.dp), fillTopAlpha = 0.04f).padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(3.dp),
+                        ) {
+                            Text(commit.subject, color = Cosmos.Text, style = MaterialTheme.typography.bodySmall)
+                            Text("${commit.shortHash} · ${commit.author} · ${commit.relativeTime}", color = Cosmos.TextMuted, style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily))
+                        }
+                    }
+                }
+                2 -> {
+                    Text("Create branch", color = Cosmos.Text, style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f)) { GitTextField(branchName, { branchName = it }, "feature/name") }
+                        LiquidButton("Create", onClick = { onCreateBranch(branchName); branchName = "" }, enabled = !state.busy && branchName.isNotBlank(), compact = true)
+                    }
+                    state.branches.forEach { branch ->
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            LiquidChip(branch, selected = branch == status?.branch, onClick = { onCheckout(branch) }, modifier = Modifier.weight(1f))
+                            if (branch != status?.branch && !branch.startsWith("remotes/")) {
+                                LiquidChip("Delete", onClick = { onDeleteBranch(branch) })
+                            }
+                        }
+                    }
+                }
+                3 -> {
+                    Text("Add or update remote", color = Cosmos.Text, style = MaterialTheme.typography.titleSmall)
+                    GitTextField(remoteName, { remoteName = it }, "origin")
+                    GitTextField(remoteUrl, { remoteUrl = it }, "https://github.com/owner/repo.git")
+                    LiquidButton("Save remote", onClick = { onAddRemote(remoteName, remoteUrl); remoteUrl = "" }, enabled = !state.busy && remoteName.isNotBlank() && remoteUrl.isNotBlank(), compact = true)
+                    state.remoteDetails.forEach { remote ->
+                        Column(
+                            Modifier.fillMaxWidth().liquidGlass(shape = RoundedCornerShape(10.dp), fillTopAlpha = 0.04f).padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(remote.name, color = Cosmos.Text, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = MonoFamily), modifier = Modifier.weight(1f))
+                                LiquidChip("Remove", onClick = { onRemoveRemote(remote.name) })
+                            }
+                            remote.fetchUrl?.let { Text("fetch $it", color = Cosmos.TextMuted, style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily)) }
+                            remote.pushUrl?.takeIf { it != remote.fetchUrl }?.let { Text("push  $it", color = Cosmos.TextMuted, style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily)) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GitFileRow(
+    file: com.legion.orion.claudecode.GitRemoteManager.GitFileState,
+    staged: Boolean,
+    onAction: () -> Unit,
+    onDiff: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().liquidGlass(shape = RoundedCornerShape(10.dp), fillTopAlpha = 0.04f).padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(file.path, color = if (file.conflicted) Cosmos.Red else Cosmos.Text, style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFamily), maxLines = 2)
+            Text(file.label, color = if (file.conflicted) Cosmos.Red else Cosmos.TextMuted, style = MaterialTheme.typography.labelSmall)
+        }
+        LiquidChip("Diff", onClick = onDiff)
+        LiquidChip(if (staged) "Unstage" else "Stage", selected = !staged, onClick = onAction)
+    }
+}
+
+@Composable
+internal fun GitTextField(value: String, onValueChange: (String) -> Unit, placeholder: String, obscure: Boolean = false) {
     BasicTextField(
         value = value,
         onValueChange = onValueChange,

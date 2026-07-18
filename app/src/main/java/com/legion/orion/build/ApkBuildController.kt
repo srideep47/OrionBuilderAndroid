@@ -1,6 +1,7 @@
 package com.legion.orion.build
 
 import android.content.Context
+import com.legion.orion.claudecode.ClaudeCodeToolchain
 import com.legion.orion.inference.InferenceController
 import com.legion.orion.runtime.buildtools.ApkInstaller
 import com.legion.orion.runtime.buildtools.BuildResult
@@ -20,15 +21,21 @@ import javax.inject.Singleton
  */
 @Singleton
 class ApkBuildController @Inject constructor(
-    @ApplicationContext context: Context,
+    @ApplicationContext private val context: Context,
     private val inference: InferenceController,
 ) {
     private val toolchain = BuildToolchain(context)
     private val runner = GradleBuildRunner(toolchain)
+    private val claudeToolchain = ClaudeCodeToolchain(context)
+    private val prootRunner = ProotAndroidBuildRunner(claudeToolchain)
     private val installer = ApkInstaller(context)
     private val toolchainInstaller = ToolchainInstaller(toolchain, context.assets)
 
-    fun toolchainStatus(): BuildToolchain.Status = toolchain.status()
+    fun toolchainStatus(): BuildToolchain.Status {
+        val native = toolchain.status()
+        return if (native.provisioned || !prootRunner.status().provisioned) native
+        else BuildToolchain.Status(provisioned = true, missing = emptyList())
+    }
 
     /**
      * Installs the on-device toolchain (Android SDK, build-tools, JDK 17) by extracting it into
@@ -58,8 +65,26 @@ class ApkBuildController @Inject constructor(
         install: Boolean,
         onLog: (String) -> Unit,
     ): BuildResult {
-        val status = toolchain.status()
-        if (!status.provisioned) return BuildResult(false, null, -1, status.describe())
+        val nativeStatus = toolchain.status()
+        val prootStatus = prootRunner.status()
+        if (!nativeStatus.provisioned && !prootStatus.provisioned) {
+            return BuildResult(
+                false,
+                null,
+                -1,
+                "No Android build toolchain is ready. Native: ${nativeStatus.missing.joinToString()}; " +
+                    "Claude runtime: ${prootStatus.missing.joinToString()}",
+            )
+        }
+        val layout = AndroidProjectLocator.locate(projectDir)
+            ?: return BuildResult(
+                false,
+                null,
+                -1,
+                "No Android application was found. Orion searched the project and nested Gradle roots up to five levels deep.",
+            )
+        val workId = "build:${layout.workspaceRoot.canonicalPath}"
+        DevelopmentWorkService.acquire(context, workId, "Building ${layout.workspaceRoot.name}")
 
         // Free the model for the build, remembering what to restore afterward.
         val restore = inference.state.value.takeIf { inference.isLoaded && it.modelDir != null && it.backend != null }
@@ -68,7 +93,16 @@ class ApkBuildController @Inject constructor(
             runCatching { inference.unload() }
         }
         try {
-            val result = runner.assembleDebugApk(projectDir, onLog)
+            val result = if (nativeStatus.provisioned) {
+                onLog("Using Orion's native Android toolchain.")
+                onLog(
+                    "Detected Gradle root '${layout.relativeGradleRoot}', task ${layout.assembleDebugTask}, " +
+                        if (layout.hasWrapper) "using the project's wrapper." else "but it has no wrapper.",
+                )
+                runner.assembleDebugApk(layout.gradleRoot, layout.assembleDebugTask, layout.applicationModule, onLog)
+            } else {
+                prootRunner.assembleDebugApk(layout, onLog)
+            }
             val apk = result.apk
             if (result.success && install && apk != null) {
                 onLog("Installing ${apk.name} via PackageInstaller…")
@@ -78,6 +112,7 @@ class ApkBuildController @Inject constructor(
             }
             return result
         } finally {
+            DevelopmentWorkService.release(context, workId)
             if (restore != null) {
                 onLog("Reloading model…")
                 runCatching { inference.load(restore.modelDir!!, restore.backend!!) }

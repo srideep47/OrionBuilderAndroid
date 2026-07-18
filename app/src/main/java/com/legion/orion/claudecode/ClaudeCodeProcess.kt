@@ -56,6 +56,8 @@ class ClaudeCodeProcess(
      * but still blocks on "This command requires approval" for Bash, which nothing can ever answer in
      * this headless setup, discovered when a preview dev-server launch silently failed this way. */
     private val permissionMode: String = "bypassPermissions",
+    private val toolBridgePort: Int,
+    private val toolBridgeToken: String,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
     private val turnLock = Mutex()
@@ -65,16 +67,23 @@ class ClaudeCodeProcess(
     private var reader: BufferedReader? = null
 
     private val guestProjectDir = "/root/project"
+    private val cpuWorkers = Runtime.getRuntime().availableProcessors().coerceIn(1, 16)
 
     private fun buildCommand(resume: String?): List<String> {
+        ensureOrionIntegrationFiles()
+        val effectivePermissionMode = if (permissionMode == "manual") "default" else permissionMode
         val innerScript = buildString {
             append("export PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; ")
             append("export HOME=/root; export TERM=dumb; ")
+            append("export MAKEFLAGS=-j$cpuWorkers CMAKE_BUILD_PARALLEL_LEVEL=$cpuWorkers CARGO_BUILD_JOBS=$cpuWorkers; ")
+            append("export GOMAXPROCS=$cpuWorkers RAYON_NUM_THREADS=$cpuWorkers OMP_NUM_THREADS=$cpuWorkers OPENBLAS_NUM_THREADS=$cpuWorkers; ")
+            append("export UV_THREADPOOL_SIZE=${(cpuWorkers * 4).coerceAtMost(128)}; ")
             append("exec claude -p --input-format=stream-json --output-format=stream-json ")
-            append("--include-partial-messages --permission-mode ").append(permissionMode)
+            append("--include-partial-messages --permission-mode ").append(effectivePermissionMode)
             append(" --effort ").append(effort)
             append(" --verbose")
-            append(" --append-system-prompt \"").append(PREVIEW_SYSTEM_PROMPT).append("\"")
+            append(" --settings /root/.claude/orion-settings.json")
+            append(" --append-system-prompt ").append(shq(PREVIEW_SYSTEM_PROMPT))
             if (model != null) append(" --model ").append(model)
             if (resume != null) append(" --resume ").append(resume)
         }
@@ -107,8 +116,134 @@ class ClaudeCodeProcess(
                 "$PREVIEW_PORT, e.g. npm run dev -- --port $PREVIEW_PORT for Vite, PORT=$PREVIEW_PORT " +
                 "npm start for Create React App). Start it with Bash in the background (trailing &) so " +
                 "it keeps running after your reply. The user's preview pane only ever looks at " +
-                "http://127.0.0.1:$PREVIEW_PORT/ - never use a different port."
+                "http://127.0.0.1:$PREVIEW_PORT/ - never use a different port. " +
+                "Orion also provides the Bash command orion-tool. Use orion-tool status to inspect " +
+                "availability. For web QA use preview-qa, preview-tree, preview-console, preview-eval, " +
+                "and preview-screenshot; then use Read on /root/project/.orion/preview.png to inspect " +
+                "it visually. For installed Android app QA, device verification must be enabled by " +
+                "the user in Android Accessibility settings; then use android-project, android-build, android-launch, " +
+                "device-tree, device-click/device-type/device-tap, device-screenshot, and use Read on " +
+                "/root/project/.orion/device.png. Never claim visual UI verification without actually " +
+                "reading the screenshot and checking the relevant UI state. Run orion-tool help for syntax."
+
+        const val ORION_TOOL_CLIENT = """#!/usr/bin/python3
+import json, os, socket, sys
+
+HELP = '''Orion visual/device QA commands:
+  orion-tool status
+  orion-tool preview-qa | preview-tree | preview-console
+  orion-tool preview-screenshot [relative.png]
+  orion-tool preview-eval <javascript>
+  orion-tool preview-navigate <url>
+  orion-tool device-screenshot [relative.png]
+  orion-tool device-tree
+  orion-tool device-click <text|description|view-id>
+  orion-tool device-type <selector> <text>
+  orion-tool device-tap <x> <y>
+  orion-tool device-long-press <x> <y> [milliseconds]
+  orion-tool device-swipe <x1> <y1> <x2> <y2> [milliseconds]
+  orion-tool device-wait <selector> [seconds]
+  orion-tool device-global <back|home|recents|notifications|quick-settings>
+  orion-tool android-project
+  orion-tool android-build [--install]
+  orion-tool android-launch [package]
+  orion-tool session-status              # internal Claude status-line transport
+  orion-tool permission-request          # internal permission UI transport
+Screenshots default to .orion/preview.png and .orion/device.png. Read the PNG afterward.'''
+
+if len(sys.argv) < 2 or sys.argv[1] in ('help', '--help', '-h'):
+    print(HELP); sys.exit(0)
+cmd = sys.argv[1].replace('-', '_')
+args = sys.argv[2:]
+req = {'action': cmd, 'token': os.environ.get('ORION_TOOL_TOKEN',''), 'project': os.environ.get('ORION_PROJECT_HOST','')}
+if cmd in ('preview_screenshot','device_screenshot') and args: req['output'] = args[0]
+elif cmd == 'preview_eval': req['expression'] = ' '.join(args)
+elif cmd == 'preview_navigate': req['url'] = args[0] if args else ''
+elif cmd == 'device_click': req['selector'] = ' '.join(args)
+elif cmd == 'device_type':
+    if len(args) < 2: print('device-type needs selector and text', file=sys.stderr); sys.exit(2)
+    req['selector'], req['text'] = args[0], ' '.join(args[1:])
+elif cmd == 'device_tap':
+    if len(args) != 2: print('device-tap needs x y', file=sys.stderr); sys.exit(2)
+    req['x'], req['y'] = float(args[0]), float(args[1])
+elif cmd == 'device_long_press':
+    if len(args) < 2: print('device-long-press needs x y [milliseconds]', file=sys.stderr); sys.exit(2)
+    req['x'], req['y'] = float(args[0]), float(args[1])
+    req['duration'] = float(args[2]) if len(args) > 2 else 800
+elif cmd == 'device_swipe':
+    if len(args) < 4: print('device-swipe needs x1 y1 x2 y2 [milliseconds]', file=sys.stderr); sys.exit(2)
+    req['from_x'], req['from_y'], req['to_x'], req['to_y'] = map(float, args[:4])
+    req['duration'] = float(args[4]) if len(args) > 4 else 350
+elif cmd == 'device_wait':
+    if not args: print('device-wait needs selector [seconds]', file=sys.stderr); sys.exit(2)
+    req['selector'] = args[0]
+    req['timeout'] = float(args[1]) * 1000 if len(args) > 1 else 15000
+elif cmd == 'device_global': req['global'] = args[0] if args else ''
+elif cmd == 'android_build': req['install'] = str('--install' in args).lower()
+elif cmd == 'android_launch' and args: req['package'] = args[0]
+elif cmd in ('session_status', 'permission_request'):
+    try: req['data'] = json.load(sys.stdin)
+    except Exception as e:
+        print('Expected JSON on stdin: ' + str(e), file=sys.stderr); sys.exit(2)
+
+try:
+    port = int(os.environ.get('ORION_TOOL_PORT','0'))
+    with socket.create_connection(('127.0.0.1', port), timeout=3600) as s:
+        s.sendall((json.dumps(req) + '\n').encode())
+        response = None
+        for data in s.makefile('r'):
+            item = json.loads(data)
+            if item.get('event') == 'log':
+                print(item.get('output',''), flush=True)
+                continue
+            response = item
+            break
+    if response is None: raise RuntimeError('Orion tool bridge closed without a result')
+    print(response.get('output',''))
+    sys.exit(0 if response.get('ok') else 1)
+except Exception as e:
+    print('Orion tool bridge error: ' + str(e), file=sys.stderr); sys.exit(1)
+"""
+
+        const val ORION_CLAUDE_SETTINGS = """{
+  "statusLine": {
+    "type": "command",
+    "command": "orion-tool session-status >/dev/null 2>&1 || true; echo Orion",
+    "refreshInterval": 2
+  },
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "orion-tool permission-request",
+            "timeout": 900
+          }
+        ]
+      }
+    ]
+  }
+}
+"""
     }
+
+    private fun ensureOrionIntegrationFiles() {
+        val client = File(toolchain.rootfsDir, "root/.local/bin/orion-tool")
+        client.parentFile?.mkdirs()
+        if (!client.exists() || client.readText() != ORION_TOOL_CLIENT) {
+            client.writeText(ORION_TOOL_CLIENT)
+            client.setExecutable(true, true)
+        }
+        val settings = File(toolchain.rootfsDir, "root/.claude/orion-settings.json")
+        settings.parentFile?.mkdirs()
+        if (!settings.exists() || settings.readText() != ORION_CLAUDE_SETTINGS) {
+            settings.writeText(ORION_CLAUDE_SETTINGS)
+        }
+    }
+
+    private fun shq(value: String): String = "'" + value.replace("'", "'\\''") + "'"
 
     private fun ensureStarted() {
         if (process?.isAlive == true) return
@@ -120,6 +255,9 @@ class ClaudeCodeProcess(
                 environment()["PROOT_LOADER_32"] = toolchain.loader32Bin.absolutePath
                 environment()["PROOT_TMP_DIR"] = toolchain.prootTmpDir.absolutePath
                 environment()["LD_LIBRARY_PATH"] = toolchain.libDir.absolutePath
+                environment()["ORION_TOOL_PORT"] = toolBridgePort.toString()
+                environment()["ORION_TOOL_TOKEN"] = toolBridgeToken
+                environment()["ORION_PROJECT_HOST"] = projectDir.absolutePath
             }
             .start()
         process = proc
@@ -127,14 +265,23 @@ class ClaudeCodeProcess(
         reader = proc.inputStream.bufferedReader()
     }
 
-    private class Attempt(val events: List<JsonObject>, val isStaleResumeFailure: Boolean)
+    private class Attempt(val isStaleResumeFailure: Boolean)
 
-    /** One full write-turn/read-until-result cycle. Detects the specific "stale --resume id" failure
-     * signature (`type:"result"` with `is_error:true` and `num_turns:0` — confirmed on-device: Claude
-     * Code prints `"No conversation found with session ID: ..."` and exits this way when asked to
-     * resume a session that doesn't exist in `~/.claude/` — which happens whenever the bundled rootfs
-     * gets wiped and re-extracted, e.g. on an asset-version bump, while Room still has the old id). */
-    private suspend fun runOneAttempt(userText: String): Attempt = withContext(Dispatchers.IO) {
+    /** One full write-turn/read-until-result cycle, forwarding each parsed event to [onEvent] as soon
+     * as it's read off the process's stdout — not batched until the turn finishes — so the UI renders
+     * reasoning/tool calls live instead of the whole turn appearing at once at the end (a real
+     * regression this fixes: [onEvent] used to be a local list appended to in this loop and only
+     * forwarded to the caller after `break`, which made every turn look frozen on "Thinking…" until
+     * completion). Also detects the specific "stale --resume id" failure signature (`type:"result"`
+     * with `is_error:true` and `num_turns:0` — confirmed on-device: Claude Code prints `"No
+     * conversation found with session ID: ..."` and exits this way when asked to resume a session
+     * that doesn't exist in `~/.claude/` — which happens whenever the bundled rootfs gets wiped and
+     * re-extracted, e.g. on an asset-version bump, while Room still has the old id). That failure
+     * signature is only ever an init event immediately followed by an error result, so streaming it
+     * live before the caller discards-and-retries is a harmless, momentary flash in that rare case —
+     * far cheaper than batching every normal turn's entire output.
+     */
+    private suspend fun runOneAttempt(userText: String, onEvent: suspend (JsonObject) -> Unit): Attempt = withContext(Dispatchers.IO) {
         ensureStarted()
         val w = writer ?: error("Claude Code process failed to start")
         val r = reader ?: error("Claude Code process failed to start")
@@ -150,7 +297,6 @@ class ClaudeCodeProcess(
         w.write("\n")
         w.flush()
 
-        val events = mutableListOf<JsonObject>()
         var staleResume = false
         while (true) {
             // A concurrent stop() (e.g. from setClaudeCodeOptions) closes this reader out from under
@@ -160,7 +306,7 @@ class ClaudeCodeProcess(
             if (line == null) {
                 // Process died mid-turn — surface as an error event and force a respawn on retry.
                 process = null
-                events.add(buildJsonObject { put("type", "orion_process_died") })
+                onEvent(buildJsonObject { put("type", "orion_process_died") })
                 break
             }
             if (line.isBlank()) continue
@@ -174,7 +320,7 @@ class ClaudeCodeProcess(
                 }
             }
 
-            events.add(obj)
+            onEvent(obj)
             if (obj.stringOrNull("type") == "result") {
                 val isError = (obj["is_error"] as? JsonPrimitive)?.contentOrNull == "true"
                 val numTurns = (obj["num_turns"] as? JsonPrimitive)?.contentOrNull?.toIntOrNull() ?: -1
@@ -182,29 +328,28 @@ class ClaudeCodeProcess(
                 break
             }
         }
-        Attempt(events, staleResume)
+        Attempt(staleResume)
     }
 
     /**
-     * Sends one user turn and returns a Flow of the raw parsed stream-json events for that turn
-     * (see `StreamJsonEventMapper` for translating these into `UiPart`/`ToolView`). Completes the
-     * Flow after the turn's `type:"result"` event. Only one turn may be in flight at a time — callers
-     * must await completion (or cancel) before sending the next.
+     * Sends one user turn and returns a Flow of the raw parsed stream-json events for that turn,
+     * emitted live as Claude Code produces them (see `StreamJsonEventMapper` for translating these
+     * into `UiPart`/`ToolView`). Completes the Flow after the turn's `type:"result"` event. Only one
+     * turn may be in flight at a time — callers must await completion (or cancel) before sending the
+     * next.
      *
-     * If this attempt used `--resume` and it turns out to be stale, the failed attempt is discarded
-     * (never forwarded to the caller) and silently retried once from a fresh session — the caller
-     * never needs to know a stale id existed.
+     * If this attempt used `--resume` and it turns out to be stale, it's silently retried once from a
+     * fresh session — the caller never needs to know a stale id existed.
      */
     fun sendTurn(userText: String): Flow<JsonObject> = channelFlow {
         turnLock.withLock {
             val attemptedResume = claudeSessionId != null
-            var attempt = runOneAttempt(userText)
+            var attempt = runOneAttempt(userText) { send(it) }
             if (attempt.isStaleResumeFailure && attemptedResume) {
                 claudeSessionId = null
                 stop()
-                attempt = runOneAttempt(userText)
+                attempt = runOneAttempt(userText) { send(it) }
             }
-            attempt.events.forEach { send(it) }
         }
     }
 

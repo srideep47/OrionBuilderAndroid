@@ -1,5 +1,8 @@
 package com.legion.orion.agent
 
+import android.content.Context
+import android.content.Intent
+import com.legion.orion.automation.DeviceAutomationController
 import com.legion.orion.build.ApkBuildController
 import com.legion.orion.data.project.ScaffoldManager
 import com.legion.orion.engine.agent.AgentTool
@@ -10,12 +13,14 @@ import com.legion.orion.engine.agent.tools.objectSchema
 import com.legion.orion.feature.preview.PreviewController
 import com.legion.orion.runtime.DevServerState
 import com.legion.orion.runtime.NodeController
+import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
@@ -24,6 +29,7 @@ import kotlinx.serialization.json.jsonPrimitive
  */
 @Singleton
 class AppAgentTools @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val scaffolds: ScaffoldManager,
     private val node: NodeController,
     private val devServerState: DevServerState,
@@ -32,6 +38,7 @@ class AppAgentTools @Inject constructor(
     private val buildOffload: com.legion.orion.p2p.BuildOffloadManager,
     private val p2p: com.legion.orion.infra.p2p.P2pController,
     private val media: com.legion.orion.data.media.MediaManager,
+    private val device: DeviceAutomationController,
 ) {
     fun list(): List<AgentTool> = listOf(
         CreateProjectTool(scaffolds),
@@ -43,6 +50,9 @@ class AppAgentTools @Inject constructor(
         TakeScreenshotTool(preview),
         GetAccessibilityTreeTool(preview),
         BrowserQaGateTool(preview),
+        TakeDeviceScreenshotTool(device),
+        GetDeviceUiTreeTool(device),
+        DeviceUiActionTool(device),
         CheckRenderTool(preview),
         EvalPreviewTool(preview),
         ReadConsoleLogsTool(preview),
@@ -50,10 +60,107 @@ class AppAgentTools @Inject constructor(
         InstallDependencyTool(node),
         InstallBuildToolchainTool(apkBuilder),
         BuildApkTool(apkBuilder),
+        LaunchAndroidAppTool(context),
         RunBuildJobTool(buildOffload, p2p),
         CheckBuildJobTool(buildOffload),
         QueueMediaJobTool(media),
     )
+}
+
+/** Captures the currently visible Android app after the user enables Orion device verification. */
+private class TakeDeviceScreenshotTool(private val device: DeviceAutomationController) : AgentTool {
+    override val name = "take_device_screenshot"
+    override val description =
+        "Capture the actual Android device screen, including an installed app launched for testing. " +
+            "Requires the user-enabled Orion device verification Accessibility service."
+    override val parameters = objectSchema(
+        Param("output", "string", "Project-relative PNG path (default .orion/device.png)", required = false),
+    )
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+        val relative = args.str("output")?.ifBlank { null } ?: ".orion/device.png"
+        val out = runCatching { File(ctx.projectDir, relative).canonicalFile }.getOrNull()
+            ?: return ToolResult("Invalid output path", isError = true)
+        if (!out.path.startsWith(ctx.projectDir.canonicalPath + File.separator) || !out.extension.equals("png", true)) {
+            return ToolResult("Output must be a PNG inside the project", isError = true)
+        }
+        return device.screenshot(out)
+            .fold(
+                onSuccess = { ToolResult("Device screenshot saved to ${it.relativeTo(ctx.projectDir).invariantSeparatorsPath} (${it.length()} bytes)") },
+                onFailure = { ToolResult(it.message ?: "Device screenshot failed", isError = true) },
+            )
+    }
+}
+
+private class GetDeviceUiTreeTool(private val device: DeviceAutomationController) : AgentTool {
+    override val name = "get_device_ui_tree"
+    override val description =
+        "Read the labelled accessibility tree of the currently visible Android app, including text, " +
+            "view ids, actions and screen bounds. Password values are always redacted."
+    override val parameters = objectSchema()
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult =
+        device.uiTree().fold(::ToolResult) { ToolResult(it.message ?: "UI tree failed", isError = true) }
+}
+
+private class DeviceUiActionTool(private val device: DeviceAutomationController) : AgentTool {
+    override val name = "interact_with_device"
+    override val description =
+        "Interact with the currently visible Android app for QA. Actions: click (selector), type " +
+            "(selector+text), tap (x+y), or back/home/recents/notifications/quick-settings."
+    override val parameters = objectSchema(
+        Param("action", "string", "click | type | tap | back | home | recents | notifications | quick-settings"),
+        Param("selector", "string", "Visible text, content description, or full view id", required = false),
+        Param("text", "string", "Text for the type action", required = false),
+        Param("x", "number", "Screen x coordinate for tap", required = false),
+        Param("y", "number", "Screen y coordinate for tap", required = false),
+    )
+    override val mutating = true
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+        val action = args.str("action")?.lowercase() ?: return ToolResult("Missing action", isError = true)
+        val result = when (action) {
+            "click" -> device.click(args.str("selector") ?: return ToolResult("click needs selector", true))
+            "type" -> device.type(
+                args.str("selector") ?: return ToolResult("type needs selector", true),
+                args.str("text") ?: return ToolResult("type needs text", true),
+            )
+            "tap" -> device.tap(
+                args["x"]?.jsonPrimitive?.floatOrNull ?: return ToolResult("tap needs x", true),
+                args["y"]?.jsonPrimitive?.floatOrNull ?: return ToolResult("tap needs y", true),
+            )
+            else -> device.global(action)
+        }
+        return result.fold(
+            onSuccess = { ToolResult("Device action '$action' completed") },
+            onFailure = { ToolResult(it.message ?: "Device action failed", isError = true) },
+        )
+    }
+}
+
+private class LaunchAndroidAppTool(private val context: Context) : AgentTool {
+    override val name = "launch_android_app"
+    override val description = "Launch an installed Android app for visual/device verification. Detects applicationId from the current Gradle app module when omitted."
+    override val parameters = objectSchema(
+        Param("package", "string", "Installed application package; omit to detect from app/build.gradle(.kts)", required = false),
+    )
+    override val mutating = true
+
+    override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
+        val packageName = args.str("package") ?: detectAppId(ctx.projectDir)
+            ?: return ToolResult("Could not detect applicationId; pass package explicitly", isError = true)
+        val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+            ?: return ToolResult("$packageName is not installed or has no launcher activity", isError = true)
+        context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        return ToolResult("Launched $packageName")
+    }
+
+    private fun detectAppId(project: File): String? {
+        val file = listOf(File(project, "app/build.gradle.kts"), File(project, "app/build.gradle")).firstOrNull(File::isFile)
+        val text = file?.let { runCatching { it.readText() }.getOrDefault("") }.orEmpty()
+        return Regex("applicationId\\s*(?:=\\s*)?[\\\"']([^\\\"']+)[\\\"']").find(text)?.groupValues?.getOrNull(1)
+            ?: Regex("namespace\\s*(?:=\\s*)?[\\\"']([^\\\"']+)[\\\"']").find(text)?.groupValues?.getOrNull(1)
+    }
 }
 
 /** Queues an image/video generation job to a P2P peer — NEVER generated locally. */
@@ -471,6 +578,7 @@ private class BrowserQaGateTool(private val preview: PreviewController) : AgentT
     override suspend fun execute(args: JsonObject, ctx: ToolContext): ToolResult {
         if (!preview.isAttached) return ToolResult("Preview is not open — cannot run QA gate.", isError = true)
         val diag = preview.diagnostics()
+        val failedRequests = diag.failedRequests.filterNot { it.contains("/favicon.ico", ignoreCase = true) }
         val tree = preview.accessibilityTree().orEmpty()
         val report = preview.renderReport()
         val obj = report?.let { runCatching { kotlinx.serialization.json.Json.parseToJsonElement(it) as? JsonObject }.getOrNull() }
@@ -479,7 +587,7 @@ private class BrowserQaGateTool(private val preview: PreviewController) : AgentT
         val styleTags = obj?.get("styleTags")?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
         val problems = buildList {
             if (diag.consoleErrors.isNotEmpty()) add("console errors:\n  " + diag.consoleErrors.joinToString("\n  "))
-            if (diag.failedRequests.isNotEmpty()) add("failed requests:\n  " + diag.failedRequests.joinToString("\n  "))
+            if (failedRequests.isNotEmpty()) add("failed requests:\n  " + failedRequests.joinToString("\n  "))
             if (tree.isBlank()) add("page has no accessible content")
             // Unstyled-page detection (the silent failure the other checks miss).
             if (cssRules == 0 && ((links != null && links.isNotEmpty()) || styleTags > 0)) {

@@ -38,6 +38,24 @@ class StreamJsonEventMapper {
 
     val currentParts: List<UiPart> get() = parts.toList()
 
+    data class LiveContextUsage(
+        val usedTokens: Long = 0,
+        val inputTokens: Long = 0,
+        val outputTokens: Long = 0,
+        val cacheReadTokens: Long = 0,
+        val cacheCreationTokens: Long = 0,
+        val contextWindowTokens: Long = 0,
+    )
+
+    data class LiveRateLimit(val usedPercentage: Double?, val resetsAtEpochSeconds: Long?)
+
+    var liveContextUsage: LiveContextUsage = LiveContextUsage()
+        private set
+    var fiveHourRateLimit: LiveRateLimit? = null
+        private set
+    var sevenDayRateLimit: LiveRateLimit? = null
+        private set
+
     sealed interface Outcome {
         data object InProgress : Outcome
         data class TurnComplete(val resultText: String?, val isError: Boolean, val usage: TurnUsage? = null) : Outcome
@@ -62,6 +80,7 @@ class StreamJsonEventMapper {
             "orion_process_died" -> return Outcome.ProcessDied("Claude Code process ended unexpectedly")
             "stream_event" -> (obj["event"] as? JsonObject)?.let(::handleStreamEvent)
             "user" -> handleToolResult(obj)
+            "rate_limit_event" -> handleRateLimitEvent(obj)
             "result" -> {
                 val isError = (obj["is_error"] as? JsonPrimitive)?.contentOrNull == "true"
                 val resultText = obj.stringOrNull("result") ?: (obj["errors"] as? JsonArray)
@@ -82,6 +101,19 @@ class StreamJsonEventMapper {
             "message_start" -> {
                 partIndexByBlockIndex.clear()
                 argsBuilderByBlockIndex.clear()
+                val message = event["message"] as? JsonObject
+                val usage = message?.get("usage") as? JsonObject
+                if (usage != null) updateLiveContext(usage, outputOverride = 0L)
+            }
+            "message_delta" -> {
+                val usage = event["usage"] as? JsonObject
+                usage?.longOrNull("output_tokens")?.let { output ->
+                    liveContextUsage = liveContextUsage.copy(
+                        outputTokens = output,
+                        usedTokens = liveContextUsage.inputTokens + liveContextUsage.cacheReadTokens +
+                            liveContextUsage.cacheCreationTokens + output,
+                    )
+                }
             }
             "content_block_start" -> {
                 val index = event.intOrNull("index") ?: return
@@ -166,6 +198,12 @@ class StreamJsonEventMapper {
      * turn's numbers when one is missing or renamed in a future CLI version. */
     private fun parseUsage(obj: JsonObject): TurnUsage {
         val usage = obj["usage"] as? JsonObject
+        val contextWindow = (obj["modelUsage"] as? JsonObject)
+            ?.values
+            ?.mapNotNull { (it as? JsonObject)?.longOrNull("contextWindow") }
+            ?.maxOrNull()
+            ?: 0L
+        if (contextWindow > 0) liveContextUsage = liveContextUsage.copy(contextWindowTokens = contextWindow)
         return TurnUsage(
             costUsd = obj.doubleOrNull("total_cost_usd") ?: 0.0,
             numTurns = obj.intOrNull("num_turns") ?: 0,
@@ -174,6 +212,34 @@ class StreamJsonEventMapper {
             cacheReadTokens = usage?.intOrNull("cache_read_input_tokens") ?: 0,
             cacheCreationTokens = usage?.intOrNull("cache_creation_input_tokens") ?: 0,
         )
+    }
+
+    private fun updateLiveContext(usage: JsonObject, outputOverride: Long? = null) {
+        val input = usage.longOrNull("input_tokens") ?: 0L
+        val output = outputOverride ?: usage.longOrNull("output_tokens") ?: liveContextUsage.outputTokens
+        val cacheRead = usage.longOrNull("cache_read_input_tokens") ?: 0L
+        val cacheCreation = usage.longOrNull("cache_creation_input_tokens") ?: 0L
+        liveContextUsage = liveContextUsage.copy(
+            inputTokens = input,
+            outputTokens = output,
+            cacheReadTokens = cacheRead,
+            cacheCreationTokens = cacheCreation,
+            usedTokens = input + output + cacheRead + cacheCreation,
+        )
+    }
+
+    /** Claude Code emits these in print mode even though its interactive status line is absent. */
+    private fun handleRateLimitEvent(obj: JsonObject) {
+        val info = obj["rate_limit_info"] as? JsonObject ?: obj["rateLimitInfo"] as? JsonObject ?: return
+        val type = info.stringOrNull("rateLimitType") ?: info.stringOrNull("rate_limit_type") ?: return
+        val rawUtilization = info.doubleOrNull("utilization") ?: info.doubleOrNull("used_percentage")
+        val usedPercentage = rawUtilization?.let { if (it <= 1.0) it * 100.0 else it }
+        val resetsAt = info.longOrNull("resetsAt") ?: info.longOrNull("resets_at")
+        val value = LiveRateLimit(usedPercentage, resetsAt)
+        when {
+            type.contains("five", ignoreCase = true) || type.contains("5h", ignoreCase = true) -> fiveHourRateLimit = value
+            type.contains("seven", ignoreCase = true) || type.contains("7d", ignoreCase = true) -> sevenDayRateLimit = value
+        }
     }
 
     /** Formats Claude Code's `structuredPatch` hunks (`{oldStart,oldLines,newStart,newLines,lines[]}`)
@@ -201,3 +267,6 @@ internal fun JsonObject.intOrNull(key: String): Int? = (this[key] as? JsonPrimit
 
 /** Safe double read for a top-level field that is expected to be a JSON number, if present. */
 internal fun JsonObject.doubleOrNull(key: String): Double? = (this[key] as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()
+
+/** Safe long read for token counters and epoch-second timestamps. */
+internal fun JsonObject.longOrNull(key: String): Long? = (this[key] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()

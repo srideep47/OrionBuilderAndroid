@@ -15,6 +15,9 @@ interface ProjectDao {
     @Query("SELECT * FROM projects WHERE id = :id")
     suspend fun get(id: String): ProjectEntity?
 
+    @Query("SELECT * FROM projects ORDER BY lastOpenedAt DESC")
+    suspend fun getAllOnce(): List<ProjectEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(project: ProjectEntity)
 

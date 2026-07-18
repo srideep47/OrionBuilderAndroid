@@ -34,6 +34,8 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -44,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -69,6 +72,8 @@ import com.legion.orion.core.design.LocalBottomChromeHeight
 import com.legion.orion.core.design.MonoFamily
 import com.legion.orion.core.design.liquidGlass
 import com.legion.orion.core.design.rememberHaptic
+import io.github.rosemoe.sora.event.ContentChangeEvent
+import io.github.rosemoe.sora.event.SelectionChangeEvent
 import io.github.rosemoe.sora.widget.CodeEditor
 import io.github.rosemoe.sora.widget.EditorSearcher
 import io.github.rosemoe.sora.widget.schemes.SchemeDarcula
@@ -85,10 +90,25 @@ fun EditorScreen(vm: EditorViewModel = hiltViewModel()) {
 
     var editorRef by remember { mutableStateOf<CodeEditor?>(null) }
     var loadedPath by remember { mutableStateOf<String?>(null) }
+    var loadedRevision by remember { mutableStateOf(-1L) }
+    var loadedLanguageId by remember { mutableStateOf<String?>(null) }
     var treeOpen by rememberSaveable { mutableStateOf(false) }
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var projectSheet by remember { mutableStateOf(false) }
     var newProjectSheet by remember { mutableStateOf(false) }
+    var optionsSheet by remember { mutableStateOf(false) }
+    var languageSheet by remember { mutableStateOf(false) }
+    var goToLineDialog by remember { mutableStateOf(false) }
+    var closeCandidate by remember { mutableStateOf<String?>(null) }
+    var pendingProjectId by remember { mutableStateOf<String?>(null) }
+    var settings by remember { mutableStateOf(EditorSettings()) }
+    var cursorLine by remember { mutableStateOf(1) }
+    var cursorColumn by remember { mutableStateOf(1) }
+    var selectionLength by remember { mutableStateOf(0) }
+    val languageOverrides = remember { mutableStateMapOf<String, String>() }
+    val detectedLanguage = EditorLanguageCatalog.detect(ui.openPath)
+    val automaticLanguageId = if (ui.fileSize > 2_000_000) "plain" else detectedLanguage.id
+    val selectedLanguage = EditorLanguageCatalog.byId(ui.openPath?.let(languageOverrides::get) ?: automaticLanguageId)
 
     // Keep the editor + symbol bar clear of the floating tab bar (keyboard down)
     // or the keyboard (keyboard up), so the last code lines stay visible.
@@ -112,40 +132,51 @@ fun EditorScreen(vm: EditorViewModel = hiltViewModel()) {
                 size = 34.dp,
             )
 
-            // Project pill.
-            Row(
+            Column(
                 Modifier
                     .weight(1f)
                     .liquidGlass(shape = Liquid.ShapePill, fillTopAlpha = 0.08f)
                     .clickable { projectSheet = true }
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
                 Text(
-                    ui.projectName ?: "No project",
+                    ui.openPath?.substringAfterLast('/') ?: ui.projectName ?: "No project",
                     style = MaterialTheme.typography.labelMedium,
                     color = Cosmos.Text,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
                 )
-                Icon(Icons.Outlined.ExpandMore, null, tint = Cosmos.TextMuted, modifier = Modifier.size(14.dp))
+                Text(
+                    ui.openPath?.substringBeforeLast('/', ui.projectName ?: "Project") ?: "Choose project",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+                    color = Cosmos.TextFaint,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
 
-            LiquidIconButton(Icons.AutoMirrored.Outlined.Undo, "Undo", { editorRef?.takeIf { it.canUndo() }?.undo() }, size = 34.dp)
-            LiquidIconButton(Icons.AutoMirrored.Outlined.Redo, "Redo", { editorRef?.takeIf { it.canRedo() }?.redo() }, size = 34.dp)
             LiquidIconButton(Icons.Outlined.Search, "Find", { searchOpen = !searchOpen }, active = searchOpen, size = 34.dp)
             LiquidIconButton(
                 Icons.Outlined.Save,
                 "Save",
-                onClick = {
-                    editorRef?.let { vm.onContentChange(it.text.toString()) }
-                    vm.save()
-                },
+                onClick = vm::save,
                 active = ui.dirty,
                 size = 34.dp,
             )
+            LiquidIconButton(Icons.Outlined.MoreVert, "Editor tools", { optionsSheet = true }, size = 34.dp)
+        }
+
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 10.dp, vertical = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LiquidIconButton(Icons.AutoMirrored.Outlined.Undo, "Undo", { editorRef?.takeIf { it.canUndo() }?.undo() }, size = 32.dp)
+            LiquidIconButton(Icons.AutoMirrored.Outlined.Redo, "Redo", { editorRef?.takeIf { it.canRedo() }?.redo() }, size = 32.dp)
+            LiquidChip(selectedLanguage.label, selected = true, onClick = { languageSheet = true })
+            LiquidChip("Go to line", selected = false, onClick = { goToLineDialog = true })
+            LiquidChip("Auto-save", selected = ui.autoSave, onClick = { vm.setAutoSave(!ui.autoSave) })
+            LiquidIconButton(Icons.Outlined.Refresh, "Refresh from disk", { vm.refresh() }, size = 32.dp)
         }
 
         // ── Tab strip ──
@@ -174,13 +205,16 @@ fun EditorScreen(vm: EditorViewModel = hiltViewModel()) {
                             color = if (active) Cosmos.Violet3 else Cosmos.TextMuted,
                             maxLines = 1,
                         )
+                        if (tab in ui.dirtyTabs) {
+                            Text("*", color = Color(0xFFFFB86B), style = MaterialTheme.typography.labelSmall)
+                        }
                         Icon(
                             Icons.Outlined.Close,
                             "Close",
                             tint = Cosmos.TextFaint,
                             modifier = Modifier
                                 .size(13.dp)
-                                .clickable { vm.closeTab(tab) },
+                                .clickable { if (!vm.closeTab(tab)) closeCandidate = tab },
                         )
                     }
                 }
@@ -189,8 +223,10 @@ fun EditorScreen(vm: EditorViewModel = hiltViewModel()) {
 
         // ── Search bar ──
         AnimatedVisibility(visible = searchOpen) {
-            SearchBar(editorRef)
+            EditorSearchPanel(editorRef) { searchOpen = false }
         }
+
+        EditorNoticeBanner(ui, vm)
 
         if (ui.projectDir == null) {
             Column(
@@ -209,7 +245,7 @@ fun EditorScreen(vm: EditorViewModel = hiltViewModel()) {
                 LiquidButton("New project", onClick = { newProjectSheet = true }, icon = Icons.Outlined.Add)
             }
         } else {
-            Row(Modifier.fillMaxSize()) {
+            Row(Modifier.weight(1f).fillMaxWidth()) {
                 AnimatedVisibility(visible = treeOpen) {
                     FileTree(
                         files = ui.files,
@@ -231,7 +267,7 @@ fun EditorScreen(vm: EditorViewModel = hiltViewModel()) {
                     factory = { ctx ->
                         CodeEditor(ctx).apply {
                             editorRef = this
-                            colorScheme = SchemeDarcula().apply {
+                            colorScheme = EditorLanguageSupport.colorScheme(ctx).apply {
                                 setColor(
                                     io.github.rosemoe.sora.widget.schemes.EditorColorScheme.WHOLE_BACKGROUND,
                                     Color(0xFF0C0818).toArgb(),
@@ -246,15 +282,56 @@ fun EditorScreen(vm: EditorViewModel = hiltViewModel()) {
                                 )
                             }
                             setLineSpacing(2f, 1.1f)
-                            textSizePx = 13 * ctx.resources.displayMetrics.scaledDensity
+                            textSizePx = settings.fontSizeSp * ctx.resources.displayMetrics.scaledDensity
+                            props.apply {
+                                autoIndent = true
+                                symbolPairAutoCompletion = true
+                                highlightMatchingDelimiters = true
+                                boldMatchingDelimiters = true
+                                enhancedHomeAndEnd = true
+                                stickyScroll = settings.stickyScroll
+                                actionWhenLineNumberClicked = io.github.rosemoe.sora.widget.DirectAccessProps.LN_ACTION_SELECT_LINE
+                            }
+                            subscribeEvent(ContentChangeEvent::class.java) { event, _ ->
+                                when (event.action) {
+                                    ContentChangeEvent.ACTION_INSERT -> vm.onInsert(event.changeStart.index, event.changedText)
+                                    ContentChangeEvent.ACTION_DELETE -> vm.onDelete(event.changeStart.index, event.changeEnd.index)
+                                }
+                            }
+                            subscribeEvent(SelectionChangeEvent::class.java) { _, _ ->
+                                cursorLine = cursor.leftLine + 1
+                                cursorColumn = cursor.leftColumn + 1
+                                selectionLength = (cursor.right - cursor.left).coerceAtLeast(0)
+                            }
                         }
                     },
                     update = { editor ->
                         editorRef = editor
-                        // Only reset text when switching files to avoid clobbering in-progress edits.
-                        if (loadedPath != ui.openPath) {
+                        editor.setWordwrap(settings.wordWrap)
+                        editor.setLineNumberEnabled(settings.lineNumbers)
+                        editor.setLigatureEnabled(settings.ligatures)
+                        editor.setTabWidth(settings.tabWidth)
+                        editor.props.stickyScroll = settings.stickyScroll
+                        editor.nonPrintablePaintingFlags = if (settings.showWhitespace) {
+                            CodeEditor.FLAG_DRAW_WHITESPACE_LEADING or
+                                CodeEditor.FLAG_DRAW_WHITESPACE_INNER or
+                                CodeEditor.FLAG_DRAW_WHITESPACE_TRAILING or
+                                CodeEditor.FLAG_DRAW_TAB_SAME_AS_SPACE
+                        } else {
+                            0
+                        }
+                        editor.textSizePx = settings.fontSizeSp * editor.resources.displayMetrics.scaledDensity
+                        if (loadedLanguageId != selectedLanguage.id) {
+                            editor.setEditorLanguage(EditorLanguageSupport.create(editor.context, selectedLanguage))
+                            loadedLanguageId = selectedLanguage.id
+                        }
+                        if (loadedPath != ui.openPath || loadedRevision != ui.documentRevision) {
                             editor.setText(ui.content)
                             loadedPath = ui.openPath
+                            loadedRevision = ui.documentRevision
+                            cursorLine = 1
+                            cursorColumn = 1
+                            selectionLength = 0
                         }
                     },
                 )
@@ -263,6 +340,14 @@ fun EditorScreen(vm: EditorViewModel = hiltViewModel()) {
 
         // ── Symbol bar ──
         if (ui.projectDir != null && ui.openPath != null) {
+            EditorStatusBar(
+                ui = ui,
+                language = selectedLanguage,
+                line = cursorLine,
+                column = cursorColumn,
+                selectionLength = selectionLength,
+                onLanguage = { languageSheet = true },
+            )
             SymbolBar(editorRef)
         }
     }
@@ -296,7 +381,10 @@ fun EditorScreen(vm: EditorViewModel = hiltViewModel()) {
                                 .fillMaxWidth()
                                 .clip(Liquid.ShapeSmall)
                                 .background(if (p.name == ui.projectName) Color(0x1FA88CFF) else Color.Transparent)
-                                .clickable { vm.selectProject(p.id); projectSheet = false }
+                                .clickable {
+                                    projectSheet = false
+                                    if (vm.hasDirtyDocuments()) pendingProjectId = p.id else vm.selectProject(p.id)
+                                }
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -319,6 +407,54 @@ fun EditorScreen(vm: EditorViewModel = hiltViewModel()) {
                 newProjectSheet = false
             },
             onDismiss = { newProjectSheet = false },
+        )
+    }
+
+    if (languageSheet) {
+        LanguageSheet(
+            selected = selectedLanguage,
+            onSelect = { language ->
+                ui.openPath?.let { languageOverrides[it] = language.id }
+                languageSheet = false
+            },
+            onDismiss = { languageSheet = false },
+        )
+    }
+
+    if (optionsSheet) {
+        EditorOptionsSheet(
+            settings = settings,
+            autoSave = ui.autoSave,
+            onSettings = { settings = it },
+            onAutoSave = vm::setAutoSave,
+            editor = editorRef,
+            onRefresh = { vm.refresh(); optionsSheet = false },
+            onSaveAll = { vm.saveAll(); optionsSheet = false },
+            onGoToLine = { optionsSheet = false; goToLineDialog = true },
+            onDismiss = { optionsSheet = false },
+        )
+    }
+
+    if (goToLineDialog) GoToLineDialog(editorRef) { goToLineDialog = false }
+
+    closeCandidate?.let { path ->
+        UnsavedChangesDialog(
+            fileName = path.substringAfterLast('/'),
+            onSave = {
+                if (path == ui.openPath) vm.save()
+                vm.closeTab(path, discardDirty = true)
+                closeCandidate = null
+            },
+            onDiscard = { vm.closeTab(path, discardDirty = true); closeCandidate = null },
+            onDismiss = { closeCandidate = null },
+        )
+    }
+
+    pendingProjectId?.let { projectId ->
+        UnsavedProjectDialog(
+            onSaveAndSwitch = { vm.saveAll(); vm.selectProject(projectId); pendingProjectId = null },
+            onDiscardAndSwitch = { vm.selectProject(projectId); pendingProjectId = null },
+            onDismiss = { pendingProjectId = null },
         )
     }
 }

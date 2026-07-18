@@ -21,6 +21,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.legion.orion.core.design.Cosmos
 import com.legion.orion.core.design.LiquidSegmented
+import com.legion.orion.core.design.WorkspaceHeader
+import com.legion.orion.core.design.WorkspaceTabs
 import com.legion.orion.feature.media.MediaPane
 import com.legion.orion.feature.media.PublishPane
 import com.legion.orion.feature.media.SharedMediaPane
@@ -35,34 +37,15 @@ fun HubScreen() {
     var pane by rememberSaveable { mutableIntStateOf(0) }
 
     Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Hub",
-                    style = MaterialTheme.typography.titleLarge.copy(brush = Cosmos.TitleGradient),
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    "Peers, shared compute, media, publishing",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Cosmos.TextMuted,
-                )
-            }
-        }
+        WorkspaceHeader(
+            title = "Hub",
+            subtitle = "Connect devices, create media, and publish",
+        )
 
-        LiquidSegmented(
-            options = listOf("Peers", "Media", "Shared", "Publish"),
+        WorkspaceTabs(
+            options = listOf("Network", "Create", "Library", "Publish"),
             selectedIndex = pane,
             onSelect = { pane = it },
-            modifier = Modifier
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 6.dp),
         )
 
         when (pane) {

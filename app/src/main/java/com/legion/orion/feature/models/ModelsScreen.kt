@@ -59,6 +59,8 @@ import com.legion.orion.core.design.LiquidProgress
 import com.legion.orion.core.design.LiquidSegmented
 import com.legion.orion.core.design.LocalBottomChromeHeight
 import com.legion.orion.core.design.MonoFamily
+import com.legion.orion.core.design.WorkspaceHeader
+import com.legion.orion.core.design.WorkspaceTabs
 import com.legion.orion.core.design.liquidGlass
 import com.legion.orion.data.marketplace.ModelSource
 import com.legion.orion.data.marketplace.RemoteModel
@@ -76,44 +78,27 @@ fun ModelsScreen(vm: ModelsViewModel = hiltViewModel()) {
     var pane by rememberSaveable { mutableIntStateOf(0) }
 
     Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.statusBars)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Models",
-                    style = MaterialTheme.typography.titleLarge.copy(brush = Cosmos.TitleGradient),
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    "Engine, marketplace, library, downloads",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Cosmos.TextMuted,
-                )
-            }
+        WorkspaceHeader(
+            title = "Models",
+            subtitle = "Run, manage, and discover on-device AI",
+            status = {
             val active = downloads.count { it.state == "running" || it.state == "queued" }
             if (active > 0) {
                 CosmosBadge("$active downloading", BadgeTone.Violet)
             }
-        }
+            },
+        )
 
-        LiquidSegmented(
-            options = listOf("Engine", "Market", "Local", "Downloads"),
+        WorkspaceTabs(
+            options = listOf("Engine", "Library", "Discover", "Downloads"),
             selectedIndex = pane,
             onSelect = { pane = it },
-            modifier = Modifier
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 6.dp),
         )
 
         when (pane) {
             0 -> EngineScreen()
-            1 -> MarketPane(ui, downloads, vm)
-            2 -> LocalPane(ui, localModels, vm)
+            1 -> LocalPane(ui, localModels, vm)
+            2 -> MarketPane(ui, downloads, vm)
             else -> DownloadsPane(downloads, vm)
         }
     }

@@ -25,6 +25,9 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -53,6 +56,7 @@ fun EngineScreen(vm: EngineViewModel = hiltViewModel()) {
     val serverRunning by vm.serverRunning.collectAsStateWithLifecycle()
     val localModels by vm.localModels.collectAsStateWithLifecycle()
     val memoryEstimate = vm.memoryEstimate()
+    var showAdvanced by rememberSaveable { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         LazyColumn(
@@ -64,11 +68,18 @@ fun EngineScreen(vm: EngineViewModel = hiltViewModel()) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { StatusCard(engine, ui) }
-            item { HardwareCard() }
-            item { MemoryCard(memoryEstimate) }
-            item { ServerCard(serverRunning, vm.serverPort(), vm::toggleServer) }
             item { ControlCard(ui, engine, localModels, vm) }
-            item { SettingsCard(ui.settings, vm::onSettingsChange) }
+            item { ServerCard(serverRunning, vm.serverPort(), vm::toggleServer) }
+            item { MemoryCard(memoryEstimate) }
+            item { HardwareCard() }
+            item {
+                GhostButton(
+                    text = if (showAdvanced) "Hide generation settings" else "Advanced generation settings",
+                    onClick = { showAdvanced = !showAdvanced },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (showAdvanced) item { SettingsCard(ui.settings, vm::onSettingsChange) }
             if (ui.output.isNotBlank()) {
                 item {
                     GlassPanel(modifier = Modifier.fillMaxWidth(), fill = Color(0x40000000)) {

@@ -20,12 +20,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -40,6 +43,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.legion.orion.core.database.ProjectEntity
@@ -47,6 +51,7 @@ import com.legion.orion.core.design.Cosmos
 import com.legion.orion.core.design.Liquid
 import com.legion.orion.core.design.LiquidChip
 import com.legion.orion.core.design.LiquidPanel
+import com.legion.orion.core.design.WorkspaceTabs
 import com.legion.orion.core.design.liquidGlass
 import com.legion.orion.feature.chat.ChatContent
 import com.legion.orion.feature.chat.ChatMode
@@ -55,9 +60,12 @@ import com.legion.orion.feature.chat.ClaudeCodeOptionsSheet
 import com.legion.orion.feature.chat.CommandHeader
 import com.legion.orion.feature.chat.HistorySheet
 import com.legion.orion.feature.chat.ModelSheet
+import com.legion.orion.feature.editor.EditorViewModel
 import com.legion.orion.feature.workspace.DevTool
 import com.legion.orion.feature.workspace.DevToolPanel
 import com.legion.orion.feature.workspace.WorkspaceViewModel
+import com.legion.orion.claudecode.ClaudePermissionDecision
+import com.legion.orion.claudecode.ClaudePermissionRequest
 
 /**
  * The unified Code space — a mobile-optimized Claude Code-style development environment.
@@ -78,23 +86,24 @@ private enum class CodePanel(val label: String, val tool: DevTool?) {
     FILES("Files", DevTool.FILES),
     EDITOR("Editor", DevTool.EDITOR),
     PREVIEW("Preview", DevTool.PREVIEW),
-    TERMINAL("Terminal", DevTool.TERMINAL),
-    GIT("Git", DevTool.GIT),
-    ENV("Env", DevTool.ENV),
-    TASKS("Tasks", DevTool.TASKS),
+    TOOLS("Tools", null),
 }
+
+private val advancedTools = listOf(DevTool.TERMINAL, DevTool.GIT, DevTool.ENV, DevTool.TASKS)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CodeScreen(
     chatVm: ChatViewModel = hiltViewModel(),
     workspaceVm: WorkspaceViewModel = hiltViewModel(),
+    editorVm: EditorViewModel = hiltViewModel(),
 ) {
     val ui by chatVm.ui.collectAsStateWithLifecycle()
     val messages by chatVm.messages.collectAsStateWithLifecycle()
     val chats by chatVm.chats.collectAsStateWithLifecycle()
     val engine by chatVm.engineState.collectAsStateWithLifecycle()
     val availableProjects by chatVm.availableProjects.collectAsStateWithLifecycle()
+    val permissionRequests by chatVm.pendingClaudePermissions.collectAsStateWithLifecycle()
 
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
@@ -155,6 +164,10 @@ fun CodeScreen(
                             vm = workspaceVm,
                             modifier = Modifier.weight(1f),
                             onSwitchToTerminal = { toolOrdinal = DevTool.TERMINAL.ordinal },
+                            onOpenFileInEditor = { path ->
+                                editorVm.open(path)
+                                toolOrdinal = DevTool.EDITOR.ordinal
+                            },
                         )
                     }
                 }
@@ -163,12 +176,38 @@ fun CodeScreen(
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     if (panel == CodePanel.CHAT) {
                         ChatContent(ui = ui, messages = messages, vm = chatVm, modifier = Modifier.fillMaxSize())
+                    } else if (panel == CodePanel.TOOLS) {
+                        Column(Modifier.fillMaxSize()) {
+                            ToolStrip(
+                                tools = advancedTools,
+                                selected = if (tool in advancedTools) tool else DevTool.TERMINAL,
+                                onSelect = { toolOrdinal = it.ordinal },
+                            )
+                            DevToolPanel(
+                                tool = if (tool in advancedTools) tool else DevTool.TERMINAL,
+                                vm = workspaceVm,
+                                modifier = Modifier.weight(1f),
+                                onSwitchToTerminal = { toolOrdinal = DevTool.TERMINAL.ordinal },
+                                onOpenFileInEditor = { path ->
+                                    editorVm.open(path)
+                                    toolOrdinal = DevTool.EDITOR.ordinal
+                                    panelOrdinal = CodePanel.EDITOR.ordinal
+                                },
+                            )
+                        }
                     } else {
                         DevToolPanel(
                             tool = panel.tool!!,
                             vm = workspaceVm,
                             modifier = Modifier.fillMaxSize(),
-                            onSwitchToTerminal = { panelOrdinal = CodePanel.TERMINAL.ordinal },
+                            onSwitchToTerminal = {
+                                toolOrdinal = DevTool.TERMINAL.ordinal
+                                panelOrdinal = CodePanel.TOOLS.ordinal
+                            },
+                            onOpenFileInEditor = { path ->
+                                editorVm.open(path)
+                                panelOrdinal = CodePanel.EDITOR.ordinal
+                            },
                         )
                     }
                 }
@@ -204,12 +243,66 @@ fun CodeScreen(
             ProjectPickerSheet(
                 projects = availableProjects,
                 activeProjectName = ui.projectName,
+                showJustChat = ui.mode == ChatMode.CLAUDE_CODE,
                 onNewProject = { chatVm.startFreshProject(); projectPickerOpen = false },
+                onJustChat = { chatVm.selectJustChat(); projectPickerOpen = false },
                 onSelect = { chatVm.selectProject(it); projectPickerOpen = false },
                 onDismiss = { projectPickerOpen = false },
             )
         }
+        permissionRequests.firstOrNull()?.let { request ->
+            ClaudePermissionDialog(
+                request = request,
+                onDecision = { decision -> chatVm.respondToClaudePermission(request.id, decision) },
+            )
+        }
     }
+}
+
+@Composable
+private fun ClaudePermissionDialog(
+    request: ClaudePermissionRequest,
+    onDecision: (ClaudePermissionDecision) -> Unit,
+) {
+    val detail = when (request.toolName) {
+        "Bash" -> request.toolInput["description"]?.toString()?.trim('"')
+            ?: request.toolInput["command"]?.toString()?.trim('"')
+        "Write", "Edit", "Read" -> request.toolInput["file_path"]?.toString()?.trim('"')
+        else -> null
+    } ?: request.toolInput.toString()
+    AlertDialog(
+        onDismissRequest = {},
+        properties = DialogProperties(dismissOnBackPress = false, dismissOnClickOutside = false),
+        title = { Text("Claude needs permission") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    request.toolName,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Cosmos.Violet3,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(detail.take(1_600), style = MaterialTheme.typography.bodyMedium, color = Cosmos.Text)
+                Text(
+                    "Always allow applies only to this Claude session. Orion never silently changes the repository's permission files.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { onDecision(ClaudePermissionDecision.ALLOW_ONCE) }) { Text("Allow") }
+                TextButton(onClick = { onDecision(ClaudePermissionDecision.ALLOW_SESSION) }) { Text("Always allow") }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { onDecision(ClaudePermissionDecision.DENY) }) { Text("Don't allow") }
+        },
+        containerColor = Color(0xFF120B24),
+        titleContentColor = Cosmos.Text,
+        textContentColor = Cosmos.TextDim,
+    )
 }
 
 /** Lets the user explicitly continue an existing project (resuming its Claude Code session on
@@ -220,7 +313,9 @@ fun CodeScreen(
 private fun ProjectPickerSheet(
     projects: List<ProjectEntity>,
     activeProjectName: String?,
+    showJustChat: Boolean,
     onNewProject: () -> Unit,
+    onJustChat: () -> Unit,
     onSelect: (ProjectEntity) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -253,6 +348,27 @@ private fun ProjectPickerSheet(
                             style = MaterialTheme.typography.labelSmall,
                             color = Cosmos.TextMuted,
                         )
+                    }
+                }
+            }
+            if (showJustChat) {
+                LiquidPanel(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = onJustChat),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Icon(Icons.Outlined.ChatBubbleOutline, null, tint = Cosmos.Violet3)
+                        Column(Modifier.weight(1f)) {
+                            Text("Just chat with Claude", style = MaterialTheme.typography.bodyMedium, color = Cosmos.Text)
+                            Text(
+                                "No project bound — plain conversation",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Cosmos.TextMuted,
+                            )
+                        }
                     }
                 }
             }
@@ -293,36 +409,22 @@ private fun ProjectPickerSheet(
     }
 }
 
-/** Portrait panel switcher: Chat + every dev tool, scrollable so all eight fit on a phone. */
+/** Portrait navigation keeps daily work visible and groups lower-frequency operational tools. */
 @Composable
 private fun PanelStrip(selected: CodePanel, onSelect: (CodePanel) -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp)
-            .padding(bottom = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        CodePanel.entries.forEach { p ->
-            LiquidChip(p.label, selected = p == selected, onClick = { onSelect(p) })
-        }
-    }
+    WorkspaceTabs(
+        options = CodePanel.entries.map { it.label },
+        selectedIndex = selected.ordinal,
+        onSelect = { onSelect(CodePanel.entries[it]) },
+    )
 }
 
 /** Landscape right-pane tool switcher (chat is always the left pane, so it's omitted here). */
 @Composable
 private fun ToolStrip(tools: List<DevTool>, selected: DevTool, onSelect: (DevTool) -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 12.dp)
-            .padding(top = 4.dp, bottom = 6.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        tools.forEach { t ->
-            LiquidChip(t.label, selected = t == selected, onClick = { onSelect(t) })
-        }
-    }
+    WorkspaceTabs(
+        options = tools.map { it.label },
+        selectedIndex = tools.indexOf(selected).coerceAtLeast(0),
+        onSelect = { onSelect(tools[it]) },
+    )
 }

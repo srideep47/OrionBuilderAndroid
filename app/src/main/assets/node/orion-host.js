@@ -97,7 +97,7 @@ function babel() {
   return _babel;
 }
 
-function transformCode(code, filename) {
+function transformCode(code, filename, root) {
   const ext = path.extname(filename).toLowerCase();
   const presets = [];
   if (ext === '.ts' || ext === '.tsx' || ext === '.mts' || ext === '.cts') {
@@ -117,7 +117,23 @@ function transformCode(code, filename) {
     sourceMaps: 'inline',
     compact: false,
   });
-  return out.code;
+  // Vite's default starter convention maps "@/" to the project's src directory. Native browser
+  // import maps cannot express this project-relative alias unless we know the eventual server URL,
+  // so normalize it in every transformed module. This is what lets generated shadcn projects (such
+  // as walking-pig) load their component tree instead of failing at the first @/ import.
+  let rewritten = out.code.replace(/(["'])@\//g, '$1/src/');
+  // Native ESM resolves a relative import against the requested URL. Our extensionless resolver can
+  // serve `/components/farm` from `/components/farm/index.ts`; without rewriting, `./Pig` is then
+  // (incorrectly) requested as `/components/Pig`. Normalize every static/dynamic relative module
+  // specifier against the real source file selected by resolveFile(), matching Vite's behaviour.
+  rewritten = rewritten.replace(/(\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)(["'])(\.\.?\/[^"']+)\2/g,
+    (all, prefix, quote, specifier) => {
+      const absolute = path.resolve(path.dirname(filename), specifier);
+      const relative = path.relative(root, absolute).split(path.sep).join('/');
+      if (relative.startsWith('../')) return all;
+      return prefix + quote + '/' + relative + quote;
+    });
+  return rewritten;
 }
 
 // A CSS import (`import './x.css'`) is served as a JS module that injects a <style>, Vite-style.
@@ -140,10 +156,18 @@ function buildImportMap(root) {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
     const deps = Object.assign({}, pkg.dependencies, pkg.devDependencies);
+    const versionOf = (name) => String(deps[name] || '').replace(/^[^0-9]*/, '') || null;
+    const reactVersion = versionOf('react');
+    const reactDomVersion = versionOf('react-dom');
     for (const [name, range] of Object.entries(deps)) {
       if (name.startsWith('@types/') || SKIP.has(name)) continue;
       const ver = String(range).replace(/^[^0-9]*/, '') || 'latest';
-      imports[name] = `https://esm.sh/${name}@${ver}`;
+      // UI libraries declare React as a peer. Without explicit pins esm.sh may resolve a newer peer
+      // beside the app's version, producing two hook dispatchers and fatal invalid-hook errors.
+      const peerPins = name !== 'react' && name !== 'react-dom' && reactVersion
+        ? `?deps=react@${reactVersion}${reactDomVersion ? `,react-dom@${reactDomVersion}` : ''}`
+        : '';
+      imports[name] = `https://esm.sh/${name}@${ver}${peerPins}`;
       imports[name + '/'] = `https://esm.sh/${name}@${ver}/`;
     }
   } catch (_) { /* no package.json → no import map */ }
@@ -287,7 +311,7 @@ function makeHandler(root) {
       if (SCRIPT_EXT.includes(ext)) {
         const src = fs.readFileSync(target, 'utf8');
         let js;
-        try { js = transformCode(src, target); }
+        try { js = transformCode(src, target, root); }
         catch (e) {
           const msg = 'Transform failed in ' + path.relative(root, target) + ': ' + (e && e.message ? e.message : e);
           pushDevLog(port, msg);
@@ -309,6 +333,14 @@ function makeHandler(root) {
           (accept.includes('text/css') && dest !== 'script' && dest !== 'worker');
         if (wantsStylesheet) send(res, 200, 'text/css', css);
         else send(res, 200, 'text/javascript', cssModule(css, rel));  // imported from JS → injector
+        return;
+      }
+      // Vite turns imported assets into URL-valued JS modules. A browser module request identifies
+      // itself as a script; direct <img>, <video>, font and download requests still receive bytes.
+      const fetchDest = req.headers['sec-fetch-dest'];
+      const accept = req.headers.accept || '';
+      if (fetchDest === 'script' || accept.includes('text/javascript')) {
+        send(res, 200, 'text/javascript', `export default ${JSON.stringify(rel)};`);
         return;
       }
       res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });

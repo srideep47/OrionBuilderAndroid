@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Orion Builder</string>
+    <string name="accessibility_service_description">Allows Orion, Claude Code, and local agents to capture and interact with apps only while you explicitly enable device verification.</string>
 </resources>

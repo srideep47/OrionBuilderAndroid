@@ -15,6 +15,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -37,6 +38,8 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.Fullscreen
 import androidx.compose.material.icons.outlined.FullscreenExit
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Android
+import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.OpenInBrowser
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
@@ -93,15 +96,33 @@ fun PreviewScreen(vm: PreviewViewModel = hiltViewModel()) {
     val browser by vm.browserState.collectAsStateWithLifecycle()
     val runtimeLogs by vm.runtimeLogs.collectAsStateWithLifecycle()
     val a11y by vm.a11yTree.collectAsStateWithLifecycle()
+    val project by vm.project.collectAsStateWithLifecycle()
+    val androidBuildLog by vm.androidBuildLog.collectAsStateWithLifecycle()
+    val androidBuildSucceeded by vm.androidBuildSucceeded.collectAsStateWithLifecycle()
+    val deviceVerificationEnabled by vm.deviceVerification.collectAsStateWithLifecycle()
     val uriHandler = LocalUriHandler.current
 
-    if (server == null) {
-        EmptyPreview(busy, error, vm::startPreview)
+    val activeServer = server?.takeIf { project?.kind == PreviewKind.WEB && it.projectDir == project?.path }
+    if (activeServer == null) {
+        ProjectPreviewLauncher(
+            project = project,
+            busy = busy,
+            error = error,
+            androidBuildLog = androidBuildLog,
+            androidBuildSucceeded = androidBuildSucceeded,
+            toolchainStatus = vm.androidToolchainStatus(),
+            onStartWeb = vm::startPreview,
+            onBuildAndroid = { vm.buildAndroid(install = false) },
+            onBuildInstallAndroid = { vm.buildAndroid(install = true) },
+            onLaunchAndroid = vm::launchAndroidApp,
+            deviceVerificationEnabled = deviceVerificationEnabled,
+            onEnableDeviceVerification = vm::openDeviceVerificationSettings,
+        )
         return
     }
 
     val controller = vm.previewController
-    val rootUrl = server!!.url
+    val rootUrl = activeServer.url
     var address by remember(rootUrl) { mutableStateOf(rootUrl) }
     var device by rememberSaveable { mutableStateOf(DeviceMode.FIT) }
 
@@ -239,6 +260,8 @@ fun PreviewScreen(vm: PreviewViewModel = hiltViewModel()) {
                     a11y = a11y,
                     onClear = vm::clearDiagnostics,
                     onRefreshA11y = vm::refreshAccessibility,
+                    deviceVerificationEnabled = deviceVerificationEnabled,
+                    onEnableDeviceVerification = vm::openDeviceVerificationSettings,
                 )
             }
         }
@@ -246,23 +269,104 @@ fun PreviewScreen(vm: PreviewViewModel = hiltViewModel()) {
 }
 
 @Composable
-private fun EmptyPreview(busy: Boolean, error: String?, onStart: () -> Unit) {
-    Column(
-        Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.Center,
+private fun ProjectPreviewLauncher(
+    project: PreviewProject?,
+    busy: Boolean,
+    error: String?,
+    androidBuildLog: String,
+    androidBuildSucceeded: Boolean,
+    toolchainStatus: String,
+    onStartWeb: () -> Unit,
+    onBuildAndroid: () -> Unit,
+    onBuildInstallAndroid: () -> Unit,
+    onLaunchAndroid: () -> Unit,
+    deviceVerificationEnabled: Boolean,
+    onEnableDeviceVerification: () -> Unit,
+) {
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("No preview running", style = MaterialTheme.typography.titleMedium, color = Cosmos.Text)
-        Text(
-            "Start the active chat project here, or ask the agent to run start_dev_server.",
-            style = MaterialTheme.typography.bodySmall,
-            color = Cosmos.TextMuted,
-            modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
-        )
-        LiquidButton("Run project preview", onClick = onStart, enabled = !busy, icon = Icons.Outlined.PlayArrow)
-        if (busy) CircularProgressIndicator(Modifier.padding(top = 14.dp), color = Cosmos.Violet)
-        error?.let {
-            Text(it, color = Cosmos.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 10.dp))
+        item {
+            Icon(
+                if (project?.kind == PreviewKind.ANDROID) Icons.Outlined.Android else Icons.Outlined.OpenInBrowser,
+                null,
+                tint = Cosmos.Violet3,
+                modifier = Modifier.size(34.dp),
+            )
+        }
+        item { Text(project?.name ?: "No active project", style = MaterialTheme.typography.titleMedium, color = Cosmos.Text) }
+        item {
+            Text(
+                project?.description ?: "Create or select a project from Chat or Files.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Cosmos.TextMuted,
+            )
+        }
+        when (project?.kind) {
+            PreviewKind.WEB -> item {
+                LiquidButton("Run browser preview", onClick = onStartWeb, enabled = !busy, icon = Icons.Outlined.PlayArrow)
+            }
+            PreviewKind.ANDROID -> {
+                item {
+                    Column(
+                        Modifier.fillMaxWidth().liquidGlass(shape = RoundedCornerShape(16.dp), fillTopAlpha = 0.06f).padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text("On-device Android runner", color = Cosmos.Text, style = MaterialTheme.typography.titleSmall)
+                        Text(toolchainStatus, color = Cosmos.TextMuted, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                item {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        LiquidButton("Build APK", onClick = onBuildAndroid, enabled = !busy, compact = true, icon = Icons.Outlined.Build)
+                        LiquidButton("Build & install", onClick = onBuildInstallAndroid, enabled = !busy, compact = true, icon = Icons.Outlined.Android)
+                        LiquidButton("Launch app", onClick = onLaunchAndroid, enabled = !busy, compact = true, icon = Icons.Outlined.PlayArrow)
+                    }
+                }
+                if (androidBuildLog.isNotBlank()) item {
+                    Text(
+                        androidBuildLog,
+                        Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 380.dp)
+                            .liquidGlass(shape = RoundedCornerShape(14.dp), fillTopAlpha = 0.05f).padding(12.dp),
+                        color = if (androidBuildSucceeded) Cosmos.Green else Cosmos.TextDim,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFamily = MonoFamily),
+                    )
+                }
+            }
+            PreviewKind.GENERIC -> item {
+                Text(
+                    "This project may be a CLI, backend, library, native project, or data workspace. Use Files + Editor to modify it and Terminal to run its own build/test command.",
+                    color = Cosmos.TextDim,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.fillMaxWidth().liquidGlass(shape = RoundedCornerShape(16.dp), fillTopAlpha = 0.05f).padding(14.dp),
+                )
+            }
+            null -> Unit
+        }
+        if (busy) item { CircularProgressIndicator(color = Cosmos.Violet) }
+        error?.let { message -> item { Text(message, color = Cosmos.Red, style = MaterialTheme.typography.bodySmall) } }
+        item {
+            Column(
+                Modifier.fillMaxWidth().liquidGlass(shape = RoundedCornerShape(16.dp), fillTopAlpha = 0.05f).padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Visual device verification", color = Cosmos.Text, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    if (deviceVerificationEnabled) "Enabled · agents can inspect, capture and interact with the visible test app"
+                    else "Disabled · enable explicitly to let agents verify installed apps visually",
+                    color = if (deviceVerificationEnabled) Cosmos.Green else Cosmos.TextMuted,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (!deviceVerificationEnabled) {
+                    LiquidButton("Open Accessibility settings", onClick = onEnableDeviceVerification, compact = true)
+                }
+            }
         }
     }
 }
@@ -360,6 +464,8 @@ private fun BottomPanel(
     a11y: String?,
     onClear: () -> Unit,
     onRefreshA11y: () -> Unit,
+    deviceVerificationEnabled: Boolean,
+    onEnableDeviceVerification: () -> Unit,
 ) {
     if (panel == PreviewPanel.PREVIEW) return
     var logFilter by rememberSaveable { mutableStateOf("All") }
@@ -409,10 +515,21 @@ private fun BottomPanel(
                 }
                 PreviewPanel.A11Y -> item { LogBlock(a11y ?: "No accessibility snapshot yet.") }
                 PreviewPanel.SECURITY -> item {
-                    MutedLine(
-                        "Security checks watch browser navigation, failed network requests, and console errors. " +
-                            "External publishing keys remain in Android Keystore.",
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MutedLine(
+                            "Security checks watch browser navigation, failed network requests, and console errors. " +
+                                "The Claude tool bridge is loopback-only and protected by a random session token.",
+                        )
+                        Text(
+                            if (deviceVerificationEnabled) "Device verification enabled"
+                            else "Device verification disabled",
+                            color = if (deviceVerificationEnabled) Cosmos.Green else Cosmos.TextMuted,
+                            style = MaterialTheme.typography.labelMedium,
+                        )
+                        if (!deviceVerificationEnabled) {
+                            LiquidButton("Open Accessibility settings", onClick = onEnableDeviceVerification, compact = true)
+                        }
+                    }
                 }
                 PreviewPanel.PUBLISH -> item {
                     MutedLine("Publishing hooks live in Hub → Publish. Web preview export and share actions attach here when the project has a build output.")

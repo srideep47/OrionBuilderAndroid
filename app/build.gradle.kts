@@ -45,6 +45,7 @@ android {
     }
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -83,6 +84,7 @@ android {
 }
 
 dependencies {
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
     implementation(project(":core:common"))
     implementation(project(":core:database"))
     implementation(project(":core:datastore"))
@@ -123,6 +125,7 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.work.runtime)
     implementation(libs.sora.editor)
+    implementation(libs.sora.language.textmate)
     implementation(libs.jgit)
     implementation(libs.commons.compress)
     implementation(libs.xz)

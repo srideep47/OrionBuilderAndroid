@@ -20,6 +20,7 @@ timber = "5.0.1"
 slf4j = "2.0.16"
 jgit = "6.7.0.202309050840-r"
 soraEditor = "0.23.5"
+desugarJdkLibs = "2.1.5"
 commonsCompress = "1.26.2"
 xz = "1.9"
 junit = "4.13.2"
@@ -79,6 +80,8 @@ timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "tim
 slf4j-simple = { group = "org.slf4j", name = "slf4j-simple", version.ref = "slf4j" }
 jgit = { group = "org.eclipse.jgit", name = "org.eclipse.jgit", version.ref = "jgit" }
 sora-editor = { group = "io.github.Rosemoe.sora-editor", name = "editor", version.ref = "soraEditor" }
+sora-language-textmate = { group = "io.github.Rosemoe.sora-editor", name = "language-textmate", version.ref = "soraEditor" }
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugarJdkLibs" }
 commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commonsCompress" }
 xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
 

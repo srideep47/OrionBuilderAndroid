@@ -1,5 +1,7 @@
 package com.legion.orion.feature.settings
 
+import androidx.compose.foundation.clickable
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +19,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -26,6 +30,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -48,40 +53,37 @@ import com.legion.orion.core.design.LiquidGroup
 import com.legion.orion.core.design.LiquidRow
 import com.legion.orion.core.design.LocalBottomChromeHeight
 import com.legion.orion.core.design.MonoFamily
+import com.legion.orion.core.design.WorkspaceHeader
+import com.legion.orion.core.design.WorkspaceTabs
 import com.legion.orion.core.design.liquidGlass
 
 /** Settings — providers, agent workflow, context compaction, app behavior. */
 @Composable
 fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    var pane by rememberSaveable { mutableIntStateOf(0) }
 
-    LazyColumn(
-        modifier = Modifier
-            .fillMaxSize()
-            .windowInsetsPadding(WindowInsets.statusBars),
-        contentPadding = PaddingValues(
-            start = 16.dp, end = 16.dp, top = 10.dp,
-            bottom = LocalBottomChromeHeight.current + 8.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(20.dp),
-    ) {
-        item {
-            Column {
-                Text(
-                    "Settings",
-                    style = MaterialTheme.typography.titleLarge.copy(brush = Cosmos.TitleGradient),
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    "Providers, agent workflow, and app behavior",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Cosmos.TextMuted,
-                )
-            }
-        }
+    Column(Modifier.fillMaxSize()) {
+        WorkspaceHeader(
+            title = "Settings",
+            subtitle = "Configure intelligence, workflows, and Orion",
+        )
+        WorkspaceTabs(
+            options = listOf("Providers", "Agent", "App"),
+            selectedIndex = pane,
+            onSelect = { pane = it },
+        )
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                start = 16.dp, end = 16.dp, top = 10.dp,
+                bottom = LocalBottomChromeHeight.current + 8.dp,
+            ),
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
 
         // ── Agent workflow ──
-        item {
+        if (pane == 1) item {
             LiquidGroup(title = "Agent workflow") {
                 SliderRow(
                     title = "Max agent steps",
@@ -95,7 +97,7 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
         }
 
         // ── Context compaction ──
-        item {
+        if (pane == 1) item {
             LiquidGroup(title = "Context compaction") {
                 LiquidRow(
                     title = "Auto-compact long chats",
@@ -127,7 +129,7 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
         }
 
         // ── App behavior ──
-        item {
+        if (pane == 2) item {
             LiquidGroup(title = "App behavior") {
                 LiquidRow(
                     title = "Haptic feedback",
@@ -139,7 +141,7 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
         }
 
         // ── Providers ──
-        item {
+        if (pane == 0) item {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     "CLOUD PROVIDERS",
@@ -154,7 +156,7 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
         }
 
         // ── About ──
-        item {
+        if (pane == 2) item {
             LiquidGroup(title = "About") {
                 LiquidRow(title = "App", trailing = {
                     Text("Orion Builder", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
@@ -169,6 +171,7 @@ fun SettingsScreen(vm: SettingsViewModel = hiltViewModel()) {
                     trailing = { CosmosBadge("Keystore", BadgeTone.Green) },
                 )
             }
+        }
         }
     }
 }
@@ -231,6 +234,7 @@ private fun ProviderCard(
 ) {
     var key by rememberSaveable("key-${row.provider.id}") { mutableStateOf("") }
     var baseUrl by rememberSaveable("url-${row.provider.id}") { mutableStateOf(row.provider.baseUrl ?: "") }
+    var expanded by rememberSaveable("expanded-${row.provider.id}") { mutableStateOf(false) }
 
     Column(
         Modifier
@@ -239,7 +243,10 @@ private fun ProviderCard(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth().clickable { expanded = !expanded },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
                 row.provider.label,
                 style = MaterialTheme.typography.titleSmall,
@@ -253,9 +260,17 @@ private fun ProviderCard(
             } else {
                 Text("No key", style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted)
             }
+            Spacer(Modifier.size(8.dp))
+            Icon(
+                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                if (expanded) "Collapse" else "Configure",
+                tint = Cosmos.TextMuted,
+                modifier = Modifier.size(18.dp),
+            )
         }
 
-        SettingsField(
+        if (expanded) {
+            SettingsField(
             value = key,
             onChange = { key = it },
             hint = if (row.hasKey) "Replace API key…" else "API key…",
@@ -264,7 +279,7 @@ private fun ProviderCard(
         if (row.needsBaseUrl) {
             SettingsField(value = baseUrl, onChange = { baseUrl = it }, hint = "Base URL (OpenAI-compatible)…")
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             LiquidButton(
                 "Save",
                 compact = true,
@@ -284,6 +299,7 @@ private fun ProviderCard(
                     style = LiquidButtonStyle.Glass,
                     onClick = { onSaveKey(row.provider, "") },
                 )
+            }
             }
         }
     }

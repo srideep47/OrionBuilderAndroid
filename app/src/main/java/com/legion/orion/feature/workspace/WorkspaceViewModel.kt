@@ -9,7 +9,10 @@ import com.legion.orion.claudecode.TerminalProcess
 import com.legion.orion.core.database.BuildJobEntity
 import com.legion.orion.core.database.JobsDao
 import com.legion.orion.core.database.ProjectEntity
+import com.legion.orion.core.datastore.GitAccount
+import com.legion.orion.core.datastore.GitAccountStore
 import com.legion.orion.core.datastore.SecretStore
+import com.legion.orion.data.git.GitHubDeviceAuth
 import com.legion.orion.data.project.ActiveProjectStore
 import com.legion.orion.data.project.ProjectManager
 import com.legion.orion.feature.preview.PreviewController
@@ -22,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -38,15 +42,85 @@ data class WorkspaceDiagnostics(
     val failedRequests: List<String> = emptyList(),
 )
 
+enum class GitPendingActionType { PUSH, PULL, FETCH, CLONE }
+
+/** An account-gated git op waiting on the user's choice from [GitAccountPickerDialog] — only ever
+ * populated when 2+ accounts exist; with 0 or 1 the op just runs immediately. */
+data class GitPendingAction(
+    val type: GitPendingActionType,
+    val cloneUrl: String? = null,
+    val cloneName: String? = null,
+)
+
+/** State for the GitHub OAuth device-flow sign-in banner (see [GitHubDeviceAuth]) — `userCode` /
+ * `verificationUri` populate once GitHub issues them, before the user has approved anything. */
+data class GitHubLoginState(
+    val busy: Boolean = false,
+    val userCode: String? = null,
+    val verificationUri: String? = null,
+    val error: String? = null,
+)
+
+data class CloneProgressState(
+    val url: String,
+    val name: String,
+    val phase: String = "Preparing clone",
+    val percent: Int? = null,
+    val detail: String = "Creating project folder",
+    val failed: Boolean = false,
+)
+
+internal fun parseCloneProgress(output: String, current: CloneProgressState): CloneProgressState {
+    val lines = output.replace('\r', '\n').lineSequence().map(String::trim).filter(String::isNotBlank).toList()
+    val latest = lines.lastOrNull() ?: return current
+    val progressLine = lines.lastOrNull { line ->
+        line.contains("Receiving objects", true) ||
+            line.contains("Resolving deltas", true) ||
+            line.contains("Updating files", true) ||
+            line.contains("Checking out files", true) ||
+            line.contains("Compressing objects", true) ||
+            line.contains("Counting objects", true) ||
+            line.contains("Enumerating objects", true)
+    } ?: latest
+    val phase = when {
+        progressLine.contains("Resolving deltas", true) -> "Resolving deltas"
+        progressLine.contains("Updating files", true) -> "Updating files"
+        progressLine.contains("Checking out files", true) -> "Checking out files"
+        progressLine.contains("Receiving objects", true) -> "Receiving objects"
+        progressLine.contains("Compressing objects", true) -> "Compressing objects"
+        progressLine.contains("Counting objects", true) -> "Counting objects"
+        progressLine.contains("Enumerating objects", true) -> "Enumerating objects"
+        progressLine.contains("Cloning into", true) -> "Connecting to remote"
+        else -> current.phase
+    }
+    val percent = Regex("(\\d{1,3})%").findAll(progressLine).lastOrNull()
+        ?.groupValues?.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 100)
+        ?: current.percent.takeIf { phase == current.phase }
+    return current.copy(
+        phase = phase,
+        percent = percent,
+        detail = progressLine.removePrefix("remote:").trim().take(180),
+        failed = false,
+    )
+}
+
 data class GitPanelState(
     val busy: Boolean = false,
     val isRepo: Boolean = false,
     val status: GitRemoteManager.RepoStatus? = null,
     val remotes: List<String> = emptyList(),
+    val remoteDetails: List<GitRemoteManager.GitRemote> = emptyList(),
     val branches: List<String> = emptyList(),
+    val commits: List<GitRemoteManager.GitCommit> = emptyList(),
+    val identity: GitRemoteManager.GitIdentity = GitRemoteManager.GitIdentity(null, null),
+    val diff: String = "",
+    val diffPath: String? = null,
+    val diffStaged: Boolean = false,
     val error: String? = null,
     val notice: String? = null,
     val sshPublicKey: String? = null,
+    val pendingAction: GitPendingAction? = null,
+    val cloneProgress: CloneProgressState? = null,
 )
 
 @HiltViewModel
@@ -57,6 +131,8 @@ class WorkspaceViewModel @Inject constructor(
     private val previewController: PreviewController,
     private val activeProject: ActiveProjectStore,
     private val secretStore: SecretStore,
+    private val gitAccountStore: GitAccountStore,
+    private val gitHubAuth: GitHubDeviceAuth,
     @ApplicationContext private val appContext: Context,
 ) : ViewModel() {
     val projects: StateFlow<List<ProjectEntity>> = projectManager.observeProjects()
@@ -117,77 +193,302 @@ class WorkspaceViewModel @Inject constructor(
             }
             val status = gitManager.status(dir)
             val remotes = gitManager.remotes(dir)
+            val remoteDetails = gitManager.remoteDetails(dir)
             val branches = gitManager.listBranches(dir)
+            val commits = gitManager.history(dir)
+            val identity = gitManager.identity(dir)
             if (requestId == gitRefreshRequestId) {
-                _git.value = _git.value.copy(busy = false, isRepo = true, status = status, remotes = remotes, branches = branches)
+                _git.value = _git.value.copy(
+                    busy = false,
+                    isRepo = true,
+                    status = status,
+                    remotes = remotes,
+                    remoteDetails = remoteDetails,
+                    branches = branches,
+                    commits = commits,
+                    identity = identity,
+                )
             }
         }
     }
 
-    /** Clones [url] into a brand-new project and makes it the active project. [tokenHost], if set,
-     * looks up a previously-saved PAT for that host (see [saveGitToken]) to embed for a private repo. */
-    fun cloneRepo(url: String, tokenHost: String?, name: String? = null) {
-        viewModelScope.launch {
-            _git.value = _git.value.copy(busy = true, error = null, notice = "Cloning…")
-            val token = tokenHost?.let { secretStore.get("git_pat_$it") }
-            val id = projectManager.newProjectId()
-            val dir = projectManager.dirFor(id)
-            gitManager.clone(url, dir, token)
-                .onSuccess {
-                    val projectName = name?.takeIf { it.isNotBlank() } ?: gitManager.repoNameFromUrl(url)
-                    val entity = projectManager.registerProject(id, projectName)
-                    activeProject.set(entity.id)
-                    _git.value = GitPanelState(notice = "Cloned $projectName")
-                    refreshGitStatus()
-                }
-                .onFailure {
-                    _git.value = _git.value.copy(busy = false, notice = null, error = "Clone failed: ${it.message}")
-                }
-        }
-    }
+    fun initRepository() = runGitAction("Repository initialized") { gitManager.init(it) }
+    fun stageAll() = runGitAction("Staged all changes") { gitManager.stage(it) }
+    fun unstageAll() = runGitAction("Unstaged all changes") { gitManager.unstage(it) }
+    fun stageFile(path: String) = runGitAction("Staged $path") { gitManager.stage(it, listOf(path)) }
+    fun unstageFile(path: String) = runGitAction("Unstaged $path") { gitManager.unstage(it, listOf(path)) }
 
-    fun push() {
+    fun commitChanges(message: String, authorName: String, authorEmail: String) {
         val dir = activeProjectDir() ?: return
+        if (message.isBlank() || authorName.isBlank() || authorEmail.isBlank()) {
+            _git.value = _git.value.copy(error = "Commit message, author name and email are required.")
+            return
+        }
         viewModelScope.launch {
             _git.value = _git.value.copy(busy = true, error = null, notice = null)
-            val result = gitManager.push(dir)
+            val identity = gitManager.setIdentity(dir, authorName.trim(), authorEmail.trim())
+            val result = if (identity.success) gitManager.commit(dir, message.trim()) else identity
             _git.value = _git.value.copy(
                 busy = false,
-                notice = if (result.success) "Pushed" else null,
-                error = if (result.success) null else result.output.takeLast(400),
+                notice = if (result.success) "Commit created" else null,
+                error = if (result.success) null else result.output.takeLast(1200),
             )
             refreshGitStatus()
         }
     }
 
-    fun pull() {
+    fun showDiff(path: String? = null, staged: Boolean = false) {
+        val dir = activeProjectDir() ?: return
+        viewModelScope.launch {
+            _git.value = _git.value.copy(busy = true, error = null)
+            val result = gitManager.diff(dir, staged, path)
+            _git.value = _git.value.copy(
+                busy = false,
+                diff = if (result.success) result.output.ifBlank { "No diff for this selection." } else "",
+                diffPath = path,
+                diffStaged = staged,
+                error = if (result.success) null else result.output.takeLast(1200),
+            )
+        }
+    }
+
+    fun clearDiff() { _git.value = _git.value.copy(diff = "", diffPath = null) }
+
+    fun createBranch(name: String) {
+        val dir = activeProjectDir() ?: return
+        if (name.isBlank()) return
+        runGitAction("Created branch ${name.trim()}") { gitManager.checkout(it, name.trim(), create = true) }
+    }
+
+    fun deleteBranch(name: String) {
+        val current = _git.value.status?.branch
+        if (name.isBlank() || name == current) {
+            _git.value = _git.value.copy(error = "Switch away from a branch before deleting it.")
+            return
+        }
+        runGitAction("Deleted branch $name") { gitManager.deleteBranch(it, name) }
+    }
+
+    fun addRemote(name: String, url: String) {
+        if (name.isBlank() || url.isBlank()) return
+        runGitAction("Saved remote ${name.trim()}") { gitManager.addRemote(it, name.trim(), url.trim()) }
+    }
+
+    fun removeRemote(name: String) = runGitAction("Removed remote $name") { gitManager.removeRemote(it, name) }
+
+    private fun runGitAction(notice: String, action: suspend (File) -> GitRemoteManager.GitResult) {
         val dir = activeProjectDir() ?: return
         viewModelScope.launch {
             _git.value = _git.value.copy(busy = true, error = null, notice = null)
-            val result = gitManager.pull(dir)
+            val result = action(dir)
             _git.value = _git.value.copy(
                 busy = false,
-                notice = if (result.success) "Pulled" else null,
-                error = if (result.success) null else result.output.takeLast(400),
+                notice = if (result.success) notice else null,
+                error = if (result.success) null else result.output.takeLast(1200),
             )
             refreshGitStatus()
         }
+    }
+
+    // ── Git accounts (named HTTPS-PAT profiles) ──
+
+    val gitAccounts: StateFlow<List<GitAccount>> = gitAccountStore.accounts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun addGitAccount(label: String, host: String, username: String?, pat: String) {
+        viewModelScope.launch {
+            val account = gitAccountStore.add(label, host, username)
+            secretStore.put("git_pat_account_${account.id}", pat)
+        }
+    }
+
+    fun removeGitAccount(id: String) {
+        viewModelScope.launch {
+            gitAccountStore.remove(id)
+            secretStore.remove("git_pat_account_$id")
+        }
+    }
+
+    private suspend fun tokenFor(accountId: String): String? = secretStore.get("git_pat_account_$accountId")
+
+    // ── GitHub "sign in" (OAuth device flow) — alternative to pasting a PAT by hand ──
+
+    private val _githubLogin = MutableStateFlow(GitHubLoginState())
+    val githubLogin: StateFlow<GitHubLoginState> = _githubLogin.asStateFlow()
+
+    fun beginGitHubLogin() {
+        viewModelScope.launch {
+            _githubLogin.value = GitHubLoginState(busy = true)
+            gitHubAuth.beginLogin(
+                onCode = { code ->
+                    _githubLogin.value = GitHubLoginState(
+                        busy = true,
+                        userCode = code.userCode,
+                        verificationUri = code.verificationUri,
+                    )
+                },
+            ).onSuccess { identity ->
+                val account = gitAccountStore.add(
+                    label = identity.username ?: "GitHub",
+                    host = "github.com",
+                    username = identity.username,
+                )
+                secretStore.put("git_pat_account_${account.id}", identity.accessToken)
+                _githubLogin.value = GitHubLoginState()
+            }.onFailure {
+                _githubLogin.value = GitHubLoginState(error = it.message ?: "GitHub sign-in failed")
+            }
+        }
+    }
+
+    fun dismissGitHubLogin() {
+        _githubLogin.value = GitHubLoginState()
+    }
+
+    /** Runs [action] immediately with 0 or 1 accounts (no prompt needed); with 2+, stashes it as a
+     * [GitPendingAction] for [GitAccountPickerDialog] to resolve via [resolvePendingAction] instead. */
+    private fun withAccountGate(type: GitPendingActionType, action: suspend (token: String?) -> Unit) {
+        viewModelScope.launch {
+            val accounts = gitAccountStore.accounts.first()
+            if (accounts.size >= 2) {
+                _git.value = _git.value.copy(pendingAction = GitPendingAction(type))
+            } else {
+                action(accounts.firstOrNull()?.let { tokenFor(it.id) })
+            }
+        }
+    }
+
+    fun requestPush() = withAccountGate(GitPendingActionType.PUSH) { doPush(it) }
+    fun requestPull() = withAccountGate(GitPendingActionType.PULL) { doPull(it) }
+    fun requestFetch() = withAccountGate(GitPendingActionType.FETCH) { doFetch(it) }
+
+    /** Clones [url] into a brand-new top-level project and makes it the active project — always a
+     * new top-level project regardless of where the clone was requested from (e.g. a long-press
+     * inside a nested folder in the file manager), since every git-aware tool keys off a registered
+     * top-level project id; there is no true nested-clone concept here. */
+    fun requestClone(url: String, name: String? = null) {
+        if (_git.value.cloneProgress?.failed == false) {
+            _git.value = _git.value.copy(notice = "A repository is already cloning")
+            return
+        }
+        viewModelScope.launch {
+            val accounts = gitAccountStore.accounts.first()
+            if (accounts.size >= 2) {
+                _git.value = _git.value.copy(pendingAction = GitPendingAction(GitPendingActionType.CLONE, url, name))
+            } else {
+                doClone(url, name, accounts.firstOrNull()?.let { tokenFor(it.id) })
+            }
+        }
+    }
+
+    /** User's account choice from [GitAccountPickerDialog] for whichever op is in [GitPanelState.pendingAction]. */
+    fun resolvePendingAction(accountId: String) {
+        val pending = _git.value.pendingAction ?: return
+        _git.value = _git.value.copy(pendingAction = null)
+        viewModelScope.launch {
+            val token = tokenFor(accountId)
+            when (pending.type) {
+                GitPendingActionType.PUSH -> doPush(token)
+                GitPendingActionType.PULL -> doPull(token)
+                GitPendingActionType.FETCH -> doFetch(token)
+                GitPendingActionType.CLONE -> doClone(pending.cloneUrl!!, pending.cloneName, token)
+            }
+        }
+    }
+
+    fun cancelPendingAction() {
+        _git.value = _git.value.copy(pendingAction = null)
+    }
+
+    private suspend fun doClone(url: String, name: String?, token: String?) {
+        val projectName = name?.trim()?.takeIf { it.isNotBlank() } ?: gitManager.repoNameFromUrl(url)
+        _git.value = _git.value.copy(busy = true, error = null, notice = "Cloning…")
+        val id = projectManager.newProjectId()
+        val dir = projectManager.dirFor(id)
+        _git.value = _git.value.copy(
+            busy = true,
+            error = null,
+            notice = null,
+            cloneProgress = CloneProgressState(url = url, name = projectName),
+        )
+        var progressTail = ""
+        gitManager.clone(url, dir, token) { chunk ->
+            progressTail = (progressTail + chunk).takeLast(8_192)
+            val current = _git.value.cloneProgress ?: return@clone
+            _git.value = _git.value.copy(cloneProgress = parseCloneProgress(progressTail, current))
+        }
+            .onSuccess {
+                val entity = projectManager.registerProject(id, projectName)
+                activeProject.set(entity.id)
+                _git.value = GitPanelState(notice = "Cloned $projectName")
+                refreshGitStatus()
+            }
+            .onFailure {
+                val message = it.message.orEmpty().lineSequence().lastOrNull { line -> line.isNotBlank() }
+                    ?.take(240) ?: "The repository could not be cloned"
+                _git.value = _git.value.copy(
+                    busy = false,
+                    notice = null,
+                    error = null,
+                    cloneProgress = CloneProgressState(
+                        url = url,
+                        name = projectName,
+                        phase = "Clone failed",
+                        detail = message,
+                        failed = true,
+                    ),
+                )
+            }
+    }
+
+    fun retryClone() {
+        val progress = _git.value.cloneProgress?.takeIf { it.failed } ?: return
+        requestClone(progress.url, progress.name)
+    }
+
+    fun dismissCloneProgress() {
+        _git.value = _git.value.copy(cloneProgress = null)
+    }
+
+    private suspend fun doPush(token: String?) {
+        val dir = activeProjectDir() ?: return
+        _git.value = _git.value.copy(busy = true, error = null, notice = null)
+        val result = gitManager.push(dir, token = token)
+        _git.value = _git.value.copy(
+            busy = false,
+            notice = if (result.success) "Pushed" else null,
+            error = if (result.success) null else result.output.takeLast(400),
+        )
+        refreshGitStatus()
+    }
+
+    private suspend fun doPull(token: String?) {
+        val dir = activeProjectDir() ?: return
+        _git.value = _git.value.copy(busy = true, error = null, notice = null)
+        val result = gitManager.pull(dir, token = token)
+        _git.value = _git.value.copy(
+            busy = false,
+            notice = if (result.success) "Pulled" else null,
+            error = if (result.success) null else result.output.takeLast(400),
+        )
+        refreshGitStatus()
+    }
+
+    private suspend fun doFetch(token: String?) {
+        val dir = activeProjectDir() ?: return
+        _git.value = _git.value.copy(busy = true, error = null, notice = null)
+        val result = gitManager.fetch(dir, token = token)
+        _git.value = _git.value.copy(
+            busy = false,
+            notice = if (result.success) "Fetched" else null,
+            error = if (result.success) null else result.output.takeLast(400),
+        )
+        refreshGitStatus()
     }
 
     fun checkoutBranch(branch: String) {
-        val dir = activeProjectDir() ?: return
-        viewModelScope.launch {
-            _git.value = _git.value.copy(busy = true)
-            gitManager.checkout(dir, branch)
-            refreshGitStatus()
-        }
+        runGitAction("Checked out $branch") { gitManager.checkout(it, branch) }
     }
-
-    fun saveGitToken(host: String, token: String) {
-        viewModelScope.launch { secretStore.put("git_pat_$host", token) }
-    }
-
-    suspend fun hasGitToken(host: String): Boolean = secretStore.get("git_pat_$host") != null
 
     fun generateSshKey() {
         viewModelScope.launch {
@@ -213,6 +514,11 @@ class WorkspaceViewModel @Inject constructor(
     /** Starts (or reuses) a persistent shell bound to the active project dir. Restarts if the active
      * project changed since the last start, so the shell's cwd always matches what's on screen. */
     fun startTerminal() {
+        if (!claudeCodeToolchain.status().provisioned) {
+            _terminalRunning.value = false
+            _terminalOutput.value = "Claude Code environment is not installed. Install it from the Chat mode picker first."
+            return
+        }
         val pid = activeProject.projectId.value
         if (terminalProcess != null && terminalProjectId == pid && terminalProcess?.running?.value == true) return
         terminalProcess?.stop()

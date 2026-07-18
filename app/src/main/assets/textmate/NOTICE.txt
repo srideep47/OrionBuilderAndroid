@@ -1,0 +1,6 @@
+The TextMate sample grammars and themes in this directory are vendored from
+Rosemoe/sora-editor tag 0.23.5 (commit 20f72085da27e3ffb86d3b9d79f9167c4e2a0d60).
+
+Sora Editor is licensed under LGPL-2.1-or-later. Individual grammar files retain
+their upstream TextMate/VS Code grammar licensing and attribution metadata.
+Source: https://github.com/Rosemoe/sora-editor/tree/0.23.5/app/src/main/assets/textmate

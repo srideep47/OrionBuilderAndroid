@@ -8,7 +8,12 @@ import com.legion.orion.claudecode.ClaudeCodeAuthManager
 import com.legion.orion.claudecode.ClaudeCodeInstaller
 import com.legion.orion.claudecode.ClaudeCodeProcess
 import com.legion.orion.claudecode.ClaudeCodeToolchain
+import com.legion.orion.claudecode.ClaudeCodeUsageManager
+import com.legion.orion.claudecode.ClaudeModelQuota
+import com.legion.orion.claudecode.ClaudeToolBridge
+import com.legion.orion.claudecode.ClaudePermissionDecision
 import com.legion.orion.claudecode.StreamJsonEventMapper
+import com.legion.orion.build.DevelopmentWorkService
 import com.legion.orion.core.database.ChatEntity
 import com.legion.orion.core.database.ClaudeCodeSessionDao
 import com.legion.orion.core.database.ClaudeCodeSessionEntity
@@ -45,6 +50,8 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -127,12 +134,26 @@ data class ClaudeCodeUiState(
     val lastTurnOutputTokens: Int = 0,
     val lastTurnCacheReadTokens: Int = 0,
     val lastTurnCacheCreationTokens: Int = 0,
+    /** Live values supplied by Claude Code's official status-line JSON contract. */
+    val contextUsedTokens: Long = 0,
+    val contextWindowTokens: Long = 0,
+    val contextUsedPercentage: Double? = null,
+    val contextRemainingPercentage: Double? = null,
+    val fiveHourUsedPercentage: Double? = null,
+    val fiveHourResetsAt: Long? = null,
+    val sevenDayUsedPercentage: Double? = null,
+    val sevenDayResetsAt: Long? = null,
+    val modelScopedQuotas: List<ClaudeModelQuota> = listOf(ClaudeModelQuota("Fable")),
+    val accountUsageRefreshing: Boolean = false,
+    val accountUsageError: String? = null,
+    val sessionDurationMs: Long? = null,
+    val telemetryUpdatedAt: Long? = null,
 ) {
     companion object {
         /** null entry renders as "Default" and omits --model entirely. */
         val MODEL_OPTIONS: List<String?> = listOf(null, "sonnet", "opus", "haiku", "fable")
         val EFFORT_OPTIONS = listOf("low", "medium", "high", "xhigh", "max")
-        val PERMISSION_MODE_OPTIONS = listOf("acceptEdits", "auto", "bypassPermissions", "manual", "dontAsk", "plan")
+        val PERMISSION_MODE_OPTIONS = listOf("default", "acceptEdits", "auto", "bypassPermissions", "dontAsk", "plan")
     }
 }
 
@@ -153,6 +174,7 @@ class ChatViewModel @Inject constructor(
     @ApplicationContext private val appContext: Context,
     private val claudeCodeSessionDao: ClaudeCodeSessionDao,
     private val devServerState: com.legion.orion.runtime.DevServerState,
+    private val claudeToolBridge: ClaudeToolBridge,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(ChatUiState())
@@ -173,8 +195,11 @@ class ChatViewModel @Inject constructor(
     private val claudeCodeToolchain by lazy { ClaudeCodeToolchain(appContext) }
     private val claudeCodeInstaller by lazy { ClaudeCodeInstaller(claudeCodeToolchain, appContext.assets) }
     private val claudeCodeAuth by lazy { ClaudeCodeAuthManager(claudeCodeToolchain) }
+    private val claudeCodeUsage by lazy { ClaudeCodeUsageManager(claudeCodeToolchain) }
     private val claudeCodeProcesses = mutableMapOf<String, ClaudeCodeProcess>()
     private var claudeCodeLoginSession: ClaudeCodeAuthManager.LoginSession? = null
+    private val claudeUsageRefreshMutex = Mutex()
+    private var lastClaudeUsageRefreshAt = 0L
 
     val chats: StateFlow<List<ChatEntity>> = chatRepo.observeChats()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -185,6 +210,8 @@ class ChatViewModel @Inject constructor(
 
     val engineState: StateFlow<EngineState> = controller.state
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), controller.state.value)
+
+    val pendingClaudePermissions = claudeToolBridge.pendingPermissions
 
     val messages: StateFlow<List<UiMessage>> =
         chatIdFlow.flatMapLatest { id ->
@@ -242,9 +269,50 @@ class ChatViewModel @Inject constructor(
                 )
             }
         }
+
+        viewModelScope.launch {
+            combine(activeProject.projectId, claudeToolBridge.sessionTelemetry) { activeId, telemetry ->
+                activeId?.let { id ->
+                    val path = runCatching { projects.dirFor(id).canonicalPath }.getOrNull()
+                    path?.let(telemetry::get)
+                }
+            }.collect { live ->
+                val current = _ui.value.claudeCode
+                _ui.value = _ui.value.copy(
+                    claudeCode = current.copy(
+                        sessionCostUsd = live?.costUsd ?: current.sessionCostUsd,
+                        contextUsedTokens = live?.contextUsedTokens ?: 0,
+                        contextWindowTokens = live?.contextWindowTokens ?: 0,
+                        contextUsedPercentage = live?.contextUsedPercentage,
+                        contextRemainingPercentage = live?.contextRemainingPercentage,
+                        fiveHourUsedPercentage = live?.fiveHour?.usedPercentage ?: current.fiveHourUsedPercentage,
+                        fiveHourResetsAt = live?.fiveHour?.resetsAtEpochSeconds ?: current.fiveHourResetsAt,
+                        sevenDayUsedPercentage = live?.sevenDay?.usedPercentage ?: current.sevenDayUsedPercentage,
+                        sevenDayResetsAt = live?.sevenDay?.resetsAtEpochSeconds ?: current.sevenDayResetsAt,
+                        sessionDurationMs = live?.durationMs,
+                        telemetryUpdatedAt = live?.receivedAt,
+                    ),
+                )
+            }
+        }
+
+        // Account quotas are global rather than project-specific. Refresh once per minute while the
+        // Claude surface is active; the reset countdown continues to be formatted locally.
+        viewModelScope.launch {
+            while (isActive) {
+                delay(60_000)
+                if (_ui.value.mode == ChatMode.CLAUDE_CODE && _ui.value.claudeCode.loggedIn) {
+                    refreshClaudeAccountUsageInternal(force = false)
+                }
+            }
+        }
     }
 
     fun onInput(text: String) { _ui.value = _ui.value.copy(input = text) }
+
+    fun respondToClaudePermission(id: String, decision: ClaudePermissionDecision) {
+        claudeToolBridge.respondToPermission(id, decision)
+    }
 
     fun setMode(mode: ChatMode) {
         _ui.value = _ui.value.copy(mode = mode)
@@ -284,6 +352,47 @@ class ChatViewModel @Inject constructor(
                     permissionMode = permissionMode,
                 ),
             )
+            if (auth?.loggedIn == true) refreshClaudeAccountUsageInternal(force = false)
+        }
+    }
+
+    fun refreshClaudeAccountUsage() {
+        viewModelScope.launch { refreshClaudeAccountUsageInternal(force = true) }
+    }
+
+    private suspend fun refreshClaudeAccountUsageInternal(force: Boolean) {
+        if (!_ui.value.claudeCode.installed || !_ui.value.claudeCode.loggedIn) return
+        claudeUsageRefreshMutex.withLock {
+            val now = System.currentTimeMillis()
+            if (!force && now - lastClaudeUsageRefreshAt < 55_000) return
+            val current = _ui.value.claudeCode
+            _ui.value = _ui.value.copy(
+                claudeCode = current.copy(accountUsageRefreshing = true, accountUsageError = null),
+            )
+            runCatching { claudeCodeUsage.fetch() }
+                .onSuccess { usage ->
+                    lastClaudeUsageRefreshAt = usage.fetchedAtMillis
+                    _ui.value = _ui.value.copy(
+                        claudeCode = _ui.value.claudeCode.copy(
+                            fiveHourUsedPercentage = usage.fiveHour.usedPercentage,
+                            fiveHourResetsAt = usage.fiveHour.resetsAtEpochSeconds,
+                            sevenDayUsedPercentage = usage.sevenDay.usedPercentage,
+                            sevenDayResetsAt = usage.sevenDay.resetsAtEpochSeconds,
+                            modelScopedQuotas = usage.modelScoped,
+                            accountUsageRefreshing = false,
+                            accountUsageError = null,
+                            telemetryUpdatedAt = usage.fetchedAtMillis,
+                        ),
+                    )
+                }
+                .onFailure { failure ->
+                    _ui.value = _ui.value.copy(
+                        claudeCode = _ui.value.claudeCode.copy(
+                            accountUsageRefreshing = false,
+                            accountUsageError = failure.message?.take(180) ?: "Usage refresh failed",
+                        ),
+                    )
+                }
         }
     }
 
@@ -522,7 +631,7 @@ class ChatViewModel @Inject constructor(
         maybeCompactConversation(chatId, providerEntity, provider)
         activeProject.set(pid)
         chatRepo.bindChatProject(chatId, pid, "build")
-        _ui.value = _ui.value.copy(projectName = projects.observeProjects().first().firstOrNull { it.id == pid }?.name)
+        _ui.value = _ui.value.copy(projectName = projects.get(pid)?.name)
         val dir = projects.dirFor(pid)
         val window = providerRepo.modelsFor(providerEntity.id).firstOrNull()?.contextWindow ?: 32_768
         val maxIterations = settings.maxAgentIterations.first()
@@ -546,6 +655,8 @@ class ChatViewModel @Inject constructor(
 
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
+            val workId = "agent:$pid"
+            DevelopmentWorkService.acquire(appContext, workId, "Orion agent · ${_ui.value.projectName ?: "project"}")
             var errorMsg: String? = null
             val startedAt = System.nanoTime()
             var chunks = 0
@@ -589,10 +700,12 @@ class ChatViewModel @Inject constructor(
                 withContext(NonCancellable) { chatRepo.finishAssistantParts(chatId, assistantId, parts.toList(), MsgStatus.CANCELLED) }
                 streamingFlow.value = null
                 _ui.value = _ui.value.copy(busy = false)
+                DevelopmentWorkService.release(appContext, workId)
                 throw c
             } catch (t: Throwable) {
                 errorMsg = t.message ?: "agent run failed"
             }
+            DevelopmentWorkService.release(appContext, workId)
             val status = if (errorMsg == null) MsgStatus.COMPLETE else MsgStatus.ERROR
             chatRepo.finishAssistantParts(chatId, assistantId, parts.toList(), status)
             val assistantText = parts.filter { it.type == PartType.TEXT }.joinToString("\n") { it.text }
@@ -634,6 +747,8 @@ class ChatViewModel @Inject constructor(
             model = cc.model,
             effort = cc.effort,
             permissionMode = cc.permissionMode,
+            toolBridgePort = claudeToolBridge.start(),
+            toolBridgeToken = claudeToolBridge.token,
         )
         claudeCodeProcesses[projectId] = process
         return process
@@ -653,7 +768,7 @@ class ChatViewModel @Inject constructor(
         val pid = projectId!!
         activeProject.set(pid)
         chatRepo.bindChatProject(chatId, pid, "claude_code")
-        _ui.value = _ui.value.copy(projectName = projects.observeProjects().first().firstOrNull { it.id == pid }?.name)
+        _ui.value = _ui.value.copy(projectName = projects.get(pid)?.name)
         val dir = projects.dirFor(pid)
 
         if (!claudeCodeToolchain.status().provisioned) {
@@ -684,6 +799,8 @@ class ChatViewModel @Inject constructor(
 
         streamJob?.cancel()
         streamJob = viewModelScope.launch {
+            val workId = "claude:$pid"
+            DevelopmentWorkService.acquire(appContext, workId, "Claude Code · ${_ui.value.projectName ?: "project"}")
             var errorMsg: String? = null
             var resultText: String? = null
             try {
@@ -707,6 +824,29 @@ class ChatViewModel @Inject constructor(
                         is StreamJsonEventMapper.Outcome.ProcessDied -> errorMsg = outcome.message
                         StreamJsonEventMapper.Outcome.InProgress -> {}
                     }
+                    val live = mapper.liveContextUsage
+                    val window = live.contextWindowTokens.takeIf { it > 0 }
+                        ?: _ui.value.claudeCode.contextWindowTokens.takeIf { it > 0 }
+                        ?: 0L
+                    val usedPct = if (window > 0) live.usedTokens * 100.0 / window else null
+                    val fiveHour = mapper.fiveHourRateLimit
+                    val sevenDay = mapper.sevenDayRateLimit
+                    _ui.value = _ui.value.copy(
+                        claudeCode = _ui.value.claudeCode.copy(
+                            contextUsedTokens = live.usedTokens,
+                            contextWindowTokens = window,
+                            contextUsedPercentage = usedPct,
+                            contextRemainingPercentage = usedPct?.let { (100.0 - it).coerceAtLeast(0.0) },
+                            fiveHourUsedPercentage = fiveHour?.usedPercentage
+                                ?: _ui.value.claudeCode.fiveHourUsedPercentage,
+                            fiveHourResetsAt = fiveHour?.resetsAtEpochSeconds
+                                ?: _ui.value.claudeCode.fiveHourResetsAt,
+                            sevenDayUsedPercentage = sevenDay?.usedPercentage
+                                ?: _ui.value.claudeCode.sevenDayUsedPercentage,
+                            sevenDayResetsAt = sevenDay?.resetsAtEpochSeconds
+                                ?: _ui.value.claudeCode.sevenDayResetsAt,
+                        ),
+                    )
                     val parts = if (snapshotRef != null) {
                         mapper.currentParts.map { p ->
                             if (p.type == PartType.TOOL_CALL && p.tool != null && p.tool.snapshotRef == null) {
@@ -722,16 +862,19 @@ class ChatViewModel @Inject constructor(
                 withContext(NonCancellable) { chatRepo.finishAssistantParts(chatId, assistantId, mapper.currentParts, MsgStatus.CANCELLED) }
                 streamingFlow.value = null
                 _ui.value = _ui.value.copy(busy = false)
+                DevelopmentWorkService.release(appContext, workId)
                 throw c
             } catch (t: Throwable) {
                 errorMsg = t.message ?: "Claude Code run failed"
             }
+            DevelopmentWorkService.release(appContext, workId)
             val status = if (errorMsg == null) MsgStatus.COMPLETE else MsgStatus.ERROR
             chatRepo.finishAssistantParts(chatId, assistantId, mapper.currentParts, status)
             if (!resultText.isNullOrBlank()) conversation.add(ChatMessage(ChatMessage.Role.ASSISTANT, resultText!!))
             streamingFlow.value = null
             _ui.value = _ui.value.copy(busy = false, error = errorMsg)
             if (status == MsgStatus.COMPLETE) withContext(NonCancellable) { maybeNameClaudeCodeChatAndProject(chatId, pid, isFreshProject, userText) }
+            refreshClaudeAccountUsageInternal(force = true)
             if (claudeCodeOptionsDirty) {
                 claudeCodeOptionsDirty = false
                 claudeCodeProcesses.values.forEach { it.stop() }
@@ -852,6 +995,16 @@ class ChatViewModel @Inject constructor(
         projectId = null
         activeProject.set(null)
         _ui.value = _ui.value.copy(projectName = null)
+    }
+
+    /** Project picker "Just chat with Claude" pick — Claude Code runs with no real project bound,
+     * implemented as a singleton pseudo-project (see [ProjectManager.CHAT_ONLY_PROJECT_ID]) rather
+     * than new state-tracking, so it's just [selectProject] with that project like any other. */
+    fun selectJustChat() {
+        viewModelScope.launch {
+            val chatOnly = projects.ensureChatOnlyProject()
+            selectProject(chatOnly)
+        }
     }
 
     fun deleteChat(chat: ChatEntity) {

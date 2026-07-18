@@ -3,6 +3,7 @@ package com.legion.orion
 import android.app.Application
 import com.alibaba.mls.api.ApplicationProvider
 import com.legion.orion.server.OrionServerBridge
+import com.legion.orion.claudecode.ClaudeToolBridge
 import com.localai.api.openai.di.ServiceLocator
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -17,6 +18,7 @@ class OrionApplication : Application() {
     @InstallIn(SingletonComponent::class)
     interface BridgeEntryPoint {
         fun serverBridge(): OrionServerBridge
+        fun claudeToolBridge(): ClaudeToolBridge
     }
 
     override fun onCreate() {
@@ -26,11 +28,12 @@ class OrionApplication : Application() {
 
         // Only the main (UI) process owns the model + server bridge; the :node process skips this.
         if (Application.getProcessName() == packageName) {
-            val bridge = EntryPointAccessors
-                .fromApplication(this, BridgeEntryPoint::class.java)
-                .serverBridge()
+            val entryPoint = EntryPointAccessors.fromApplication(this, BridgeEntryPoint::class.java)
+            val bridge = entryPoint.serverBridge()
             ServiceLocator.setChatSessionProvider(bridge)
             ServiceLocator.setLlmRuntimeController(bridge)
+            // Loopback-only, random-token bridge used by Claude Code's `orion-tool` command.
+            entryPoint.claudeToolBridge().start()
         }
     }
 }

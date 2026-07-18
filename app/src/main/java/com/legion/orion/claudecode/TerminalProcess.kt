@@ -26,6 +26,7 @@ class TerminalProcess(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val guestProjectDir = "/root/project"
+    private val cpuWorkers = Runtime.getRuntime().availableProcessors().coerceIn(1, 16)
 
     private val _output = MutableStateFlow("")
     val output: StateFlow<String> = _output.asStateFlow()
@@ -49,21 +50,31 @@ class TerminalProcess(
         add("/bin/bash"); add("-c")
         add(
             "export PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; " +
-                "export HOME=/root; export TERM=xterm-256color; export PS1='\\w \\$ '; exec /bin/bash --norc -i",
+                "export HOME=/root; export TERM=xterm-256color; " +
+                "export MAKEFLAGS=-j$cpuWorkers CMAKE_BUILD_PARALLEL_LEVEL=$cpuWorkers CARGO_BUILD_JOBS=$cpuWorkers; " +
+                "export GOMAXPROCS=$cpuWorkers RAYON_NUM_THREADS=$cpuWorkers OMP_NUM_THREADS=$cpuWorkers OPENBLAS_NUM_THREADS=$cpuWorkers; " +
+                "export UV_THREADPOOL_SIZE=${(cpuWorkers * 4).coerceAtMost(128)}; " +
+                "export PS1='\\w \\$ '; exec /bin/bash --norc -i",
         )
     }
 
     fun start() {
         if (process?.isAlive == true) return
-        val proc = ProcessBuilder(command())
-            .redirectErrorStream(true)
-            .apply {
-                environment()["PROOT_LOADER"] = toolchain.loaderBin.absolutePath
-                environment()["PROOT_LOADER_32"] = toolchain.loader32Bin.absolutePath
-                environment()["PROOT_TMP_DIR"] = toolchain.prootTmpDir.absolutePath
-                environment()["LD_LIBRARY_PATH"] = toolchain.libDir.absolutePath
-            }
-            .start()
+        val proc = runCatching {
+            ProcessBuilder(command())
+                .redirectErrorStream(true)
+                .apply {
+                    environment()["PROOT_LOADER"] = toolchain.loaderBin.absolutePath
+                    environment()["PROOT_LOADER_32"] = toolchain.loader32Bin.absolutePath
+                    environment()["PROOT_TMP_DIR"] = toolchain.prootTmpDir.absolutePath
+                    environment()["LD_LIBRARY_PATH"] = toolchain.libDir.absolutePath
+                }
+                .start()
+        }.getOrElse {
+            _running.value = false
+            _output.value = "Terminal failed to start: ${it.message}"
+            return
+        }
         process = proc
         writer = proc.outputStream.bufferedWriter()
         _running.value = true

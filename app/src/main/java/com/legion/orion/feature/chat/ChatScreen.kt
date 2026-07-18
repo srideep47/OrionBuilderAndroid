@@ -53,6 +53,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
@@ -126,51 +127,49 @@ internal fun CommandHeader(
     onNewChat: () -> Unit,
     onProjectPicker: (() -> Unit)? = null,
 ) {
+    // No app-name/mode-name title text here — deliberately removed (owner direction: it doesn't fit
+    // alongside the project + model pills on a ~430dp usable-width phone without wrapping to 2 lines).
+    // Don't re-add title/subtitle text to this header without checking first.
     val projectAware = ui.mode == ChatMode.BUILD || ui.mode == ChatMode.CLAUDE_CODE
     Row(
         Modifier
             .fillMaxWidth()
             .windowInsetsPadding(WindowInsets.statusBars)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         LiquidIconButton(Icons.Outlined.Menu, "History", onMenu)
-
-        Column(
-            Modifier
-                .weight(1f)
-                .then(
-                    if (projectAware && onProjectPicker != null) Modifier.clickable(onClick = onProjectPicker)
-                    else Modifier,
-                ),
-        ) {
-            Text(
-                "Orion",
-                style = MaterialTheme.typography.titleLarge.copy(brush = Cosmos.TitleGradient),
-                fontWeight = FontWeight.Bold,
-            )
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                val sub = buildString {
-                    append(
-                        when (ui.mode) {
-                            ChatMode.BUILD -> "Build agent"
-                            ChatMode.CLAUDE_CODE -> "Claude Code"
-                            ChatMode.CHAT -> "Assistant"
-                        },
-                    )
-                    append(" · ")
-                    append(ui.projectName ?: "no project")
-                }
-                Text(sub, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted, maxLines = 1)
-                if (projectAware && onProjectPicker != null) {
-                    Icon(Icons.Outlined.ExpandMore, "Switch project", tint = Cosmos.TextFaint, modifier = Modifier.size(12.dp))
-                }
-            }
+        if (projectAware && onProjectPicker != null) {
+            ProjectPill(ui = ui, onClick = onProjectPicker)
         }
-
         ModelPill(ui = ui, engine = engine, onClick = onModelPicker)
+        Spacer(Modifier.weight(1f))
         LiquidIconButton(Icons.Outlined.Add, "New chat", onNewChat)
+    }
+}
+
+/** Visible project-picker pill (previously only reachable by tapping hidden header subtitle text). */
+@Composable
+private fun ProjectPill(ui: ChatUiState, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .liquidGlass(shape = Liquid.ShapePill, fillTopAlpha = 0.09f)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(Icons.Outlined.Folder, null, tint = Cosmos.TextMuted, modifier = Modifier.size(14.dp))
+        Text(
+            ui.projectName ?: "No project",
+            style = MaterialTheme.typography.labelMedium,
+            color = Cosmos.Text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 104.dp),
+        )
+        Icon(Icons.Outlined.ExpandMore, null, tint = Cosmos.TextMuted, modifier = Modifier.size(13.dp))
     }
 }
 
@@ -186,7 +185,7 @@ private fun ModelPill(ui: ChatUiState, engine: EngineState, onClick: () -> Unit)
         Modifier
             .liquidGlass(shape = Liquid.ShapePill, fillTopAlpha = 0.09f)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -203,26 +202,14 @@ private fun ModelPill(ui: ChatUiState, engine: EngineState, onClick: () -> Unit)
                     },
                 ),
         )
-        Column {
-            Text(
-                provider?.label ?: "Pick model",
-                style = MaterialTheme.typography.labelMedium,
-                color = Cosmos.Text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 110.dp),
-            )
-            if (ui.selectedModel.isNotBlank()) {
-                Text(
-                    ui.selectedModel.substringAfterLast('/').take(24),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Cosmos.TextMuted,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 110.dp),
-                )
-            }
-        }
+        Text(
+            ui.selectedModel.substringAfterLast('/').take(18).ifBlank { provider?.label ?: "Pick model" },
+            style = MaterialTheme.typography.labelMedium,
+            color = Cosmos.Text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 96.dp),
+        )
         Icon(Icons.Outlined.ExpandMore, null, tint = Cosmos.TextMuted, modifier = Modifier.size(15.dp))
     }
 }
@@ -233,7 +220,7 @@ private fun ClaudeCodeModelPill(cc: ClaudeCodeUiState, onClick: () -> Unit) {
         Modifier
             .liquidGlass(shape = Liquid.ShapePill, fillTopAlpha = 0.09f)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -243,24 +230,14 @@ private fun ClaudeCodeModelPill(cc: ClaudeCodeUiState, onClick: () -> Unit) {
                 .clip(CircleShape)
                 .background(if (cc.loggedIn) Cosmos.Green else Cosmos.Amber),
         )
-        Column {
-            Text(
-                cc.model ?: "Default",
-                style = MaterialTheme.typography.labelMedium,
-                color = Cosmos.Text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 110.dp),
-            )
-            Text(
-                "${cc.effort} effort",
-                style = MaterialTheme.typography.labelSmall,
-                color = Cosmos.TextMuted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 110.dp),
-            )
-        }
+        Text(
+            "${cc.model ?: "Default"} · ${claudeEffortLabel(cc.effort)}",
+            style = MaterialTheme.typography.labelMedium,
+            color = Cosmos.Text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 108.dp),
+        )
         Icon(Icons.Outlined.ExpandMore, null, tint = Cosmos.TextMuted, modifier = Modifier.size(15.dp))
     }
 }
@@ -278,6 +255,7 @@ internal fun ChatContent(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
+    var claudeUsageExpanded by rememberSaveable { mutableStateOf(true) }
     val bottomChrome = LocalBottomChromeHeight.current
     // The floating nav pill is covered by the keyboard while it's up, so the extra clearance
     // reserved for it becomes dead space between the input bar and the keyboard — only reserve it
@@ -317,9 +295,23 @@ internal fun ChatContent(
         }
 
         AnimatedVisibility(
-            visible = ui.busy || ui.liveTokens > 0 || (ui.mode == ChatMode.CLAUDE_CODE && ui.claudeCode.sessionCostUsd > 0),
+            visible = ui.busy || ui.liveTokens > 0 ||
+                (ui.mode == ChatMode.CLAUDE_CODE &&
+                    (ui.claudeCode.loggedIn || ui.claudeCode.sessionCostUsd > 0 ||
+                        ui.claudeCode.contextWindowTokens > 0)),
         ) {
-            if (ui.mode == ChatMode.CLAUDE_CODE) ClaudeCodeStatsStrip(ui) else StatsStrip(ui)
+            if (ui.mode == ChatMode.CLAUDE_CODE) {
+                ClaudeCodeStatsStrip(ui, onClick = { claudeUsageExpanded = !claudeUsageExpanded })
+            } else {
+                StatsStrip(ui)
+            }
+        }
+        AnimatedVisibility(
+            visible = ui.mode == ChatMode.CLAUDE_CODE && ui.claudeCode.loggedIn && claudeUsageExpanded,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            ClaudeCodeUsageDetails(ui, onRefresh = vm::refreshClaudeAccountUsage)
         }
 
         if (ui.mode == ChatMode.CLAUDE_CODE && (!ui.claudeCode.installed || !ui.claudeCode.loggedIn || ui.claudeCode.installProgress != null)) {
@@ -396,11 +388,12 @@ private fun StatsStrip(ui: ChatUiState) {
  * [com.legion.orion.claudecode.StreamJsonEventMapper.TurnUsage]), not an estimate: cumulative session
  * cost on the left, last turn's input/output/cache token counts on the right. */
 @Composable
-private fun ClaudeCodeStatsStrip(ui: ChatUiState) {
+private fun ClaudeCodeStatsStrip(ui: ChatUiState, onClick: () -> Unit) {
     val cc = ui.claudeCode
     Row(
         Modifier
             .fillMaxWidth()
+            .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -413,21 +406,146 @@ private fun ClaudeCodeStatsStrip(ui: ChatUiState) {
             )
         }
         Text(
-            "$" + "%.4f".format(cc.sessionCostUsd),
+            if (cc.contextWindowTokens > 0) {
+                "context ${"%.0f".format(cc.contextUsedPercentage ?: 0.0)}%"
+            } else {
+                "$" + "%.4f".format(cc.sessionCostUsd)
+            },
             style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
             color = Cosmos.TextMuted,
         )
         Spacer(Modifier.weight(1f))
         val cacheSuffix = if (cc.lastTurnCacheReadTokens > 0) " · cache ${compactTokenCount(cc.lastTurnCacheReadTokens)}" else ""
         Text(
-            "in ${compactTokenCount(cc.lastTurnInputTokens)} · out ${compactTokenCount(cc.lastTurnOutputTokens)}$cacheSuffix",
+            if (cc.contextWindowTokens > 0) {
+                "${compactTokenCount(cc.contextUsedTokens)} / ${compactTokenCount(cc.contextWindowTokens)}"
+            } else {
+                "in ${compactTokenCount(cc.lastTurnInputTokens)} · out ${compactTokenCount(cc.lastTurnOutputTokens)}$cacheSuffix"
+            },
             style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
             color = Cosmos.TextMuted,
+        )
+        Icon(
+            Icons.Outlined.ExpandMore,
+            contentDescription = "Show Claude usage",
+            tint = Cosmos.TextFaint,
+            modifier = Modifier.size(14.dp),
         )
     }
 }
 
-private fun compactTokenCount(n: Int): String = when {
+@Composable
+private fun ClaudeCodeUsageDetails(ui: ChatUiState, onRefresh: () -> Unit) {
+    val cc = ui.claudeCode
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .liquidGlass(shape = Liquid.ShapeSmall, fillTopAlpha = 0.08f)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Claude usage limits",
+                style = MaterialTheme.typography.labelMedium,
+                color = Cosmos.TextDim,
+            )
+            Spacer(Modifier.weight(1f))
+            if (cc.accountUsageRefreshing) {
+                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = Cosmos.Violet)
+            } else {
+                Icon(
+                    Icons.Outlined.Refresh,
+                    contentDescription = "Refresh Claude usage limits",
+                    tint = Cosmos.TextMuted,
+                    modifier = Modifier.size(17.dp).clickable(onClick = onRefresh),
+                )
+            }
+        }
+        UsageProgressRow(
+            label = "Context window",
+            detail = if (cc.contextWindowTokens > 0) {
+                "${compactTokenCount(cc.contextUsedTokens)} / ${compactTokenCount(cc.contextWindowTokens)} " +
+                    "(${"%.0f".format(cc.contextUsedPercentage ?: 0.0)}%) · " +
+                    "${"%.0f".format(cc.contextRemainingPercentage ?: 0.0)}% remaining"
+            } else {
+                "Waiting for the first Claude response"
+            },
+            progress = ((cc.contextUsedPercentage ?: 0.0) / 100.0).toFloat(),
+        )
+        UsageProgressRow(
+            label = "5-hour limit",
+            detail = limitDetail(cc.fiveHourUsedPercentage, cc.fiveHourResetsAt),
+            progress = ((cc.fiveHourUsedPercentage ?: 0.0) / 100.0).toFloat(),
+        )
+        UsageProgressRow(
+            label = "Weekly · all models",
+            detail = limitDetail(cc.sevenDayUsedPercentage, cc.sevenDayResetsAt),
+            progress = ((cc.sevenDayUsedPercentage ?: 0.0) / 100.0).toFloat(),
+        )
+        cc.modelScopedQuotas.forEach { quota ->
+            UsageProgressRow(
+                label = "Weekly · ${quota.displayName}",
+                detail = limitDetail(quota.usedPercentage, quota.resetsAtEpochSeconds),
+                progress = ((quota.usedPercentage ?: 0.0) / 100.0).toFloat(),
+            )
+        }
+        cc.accountUsageError?.let { error ->
+            Text(
+                "Could not refresh account limits: $error",
+                style = MaterialTheme.typography.labelSmall,
+                color = Cosmos.Amber,
+            )
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(
+                "Session $${"%.4f".format(cc.sessionCostUsd)}",
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+                color = Cosmos.TextMuted,
+            )
+            cc.sessionDurationMs?.let {
+                Text(formatDuration(it), style = MaterialTheme.typography.labelSmall, color = Cosmos.TextFaint)
+            }
+        }
+    }
+}
+
+@Composable
+private fun UsageProgressRow(label: String, detail: String, progress: Float) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = Cosmos.TextDim)
+            Text(detail, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted)
+        }
+        LiquidProgress(progress = progress.coerceIn(0f, 1f), height = 3.dp)
+    }
+}
+
+private fun limitDetail(used: Double?, resetsAt: Long?): String = when {
+    used == null -> "Not reported"
+    resetsAt == null -> "${"%.0f".format(used)}% used"
+    else -> "${"%.0f".format(used)}% · resets in ${formatDuration(resetsAt * 1000L - System.currentTimeMillis())}"
+}
+
+private fun claudeEffortLabel(effort: String): String = when (effort) {
+    "xhigh" -> "Ultracode"
+    "max" -> "Max"
+    else -> effort.replaceFirstChar(Char::uppercase)
+}
+
+private fun formatDuration(milliseconds: Long): String {
+    val minutes = milliseconds.coerceAtLeast(0L) / 60_000L
+    return when {
+        minutes < 60 -> "${minutes}m"
+        minutes < 24 * 60 -> "${minutes / 60}h ${minutes % 60}m"
+        else -> "${minutes / (24 * 60)}d ${(minutes % (24 * 60)) / 60}h"
+    }
+}
+
+private fun compactTokenCount(n: Int): String = compactTokenCount(n.toLong())
+
+private fun compactTokenCount(n: Long): String = when {
     n >= 1_000_000 -> "%.1fM".format(n / 1_000_000.0)
     n >= 1_000 -> "%.1fk".format(n / 1_000.0)
     else -> n.toString()
@@ -1182,12 +1300,17 @@ internal fun ClaudeCodeOptionsSheet(
                 ) {
                     ClaudeCodeUiState.EFFORT_OPTIONS.forEach { effort ->
                         LiquidChip(
-                            text = effort,
+                            text = claudeEffortLabel(effort),
                             selected = cc.effort == effort,
                             onClick = { onPick(cc.model, effort, cc.permissionMode) },
                         )
                     }
                 }
+                Text(
+                    "Ultracode is Claude Code's xhigh effort mode; the CLI reports it as xhigh.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextFaint,
+                )
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1198,16 +1321,21 @@ internal fun ClaudeCodeOptionsSheet(
                 ) {
                     ClaudeCodeUiState.PERMISSION_MODE_OPTIONS.forEach { mode ->
                         LiquidChip(
-                            text = mode,
+                            text = when (mode) {
+                                "default" -> "Ask"
+                                "acceptEdits" -> "Accept edits"
+                                "bypassPermissions" -> "Full access"
+                                "dontAsk" -> "Deny prompts"
+                                else -> mode
+                            },
                             selected = cc.permissionMode == mode,
                             onClick = { onPick(cc.model, cc.effort, mode) },
                         )
                     }
                 }
                 Text(
-                    "bypassPermissions is recommended — it's the only mode that runs Bash commands " +
-                        "(builds, dev servers, etc.) unattended. Other modes may block or hang waiting " +
-                        "for an approval no one is here to give.",
+                    "Ask and Accept edits show Orion's approval dialog with Allow, Don't allow, and " +
+                        "Always allow for this session. Full access runs unattended; Plan stays read-only.",
                     style = MaterialTheme.typography.labelSmall,
                     color = Cosmos.TextFaint,
                 )
