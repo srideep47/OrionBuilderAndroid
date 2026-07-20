@@ -1,3 +1,6 @@
 app/src/main/assets/toolchain/*.tar.xz filter=lfs diff=lfs merge=lfs -text
 app/src/main/assets/claudecode/*.tar.xz filter=lfs diff=lfs merge=lfs -text
 runtime/node/src/main/jniLibs/**/*.so filter=lfs diff=lfs merge=lfs -text
+runtime/godot/repo/**/*.aar filter=lfs diff=lfs merge=lfs -text
+runtime/godot/src/main/assets/bin/*.so filter=lfs diff=lfs merge=lfs -text
+runtime/godot/src/main/jniLibs/**/*.so filter=lfs diff=lfs merge=lfs -text

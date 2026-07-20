@@ -170,6 +170,7 @@ class ChatViewModel @Inject constructor(
     private val projects: ProjectManager,
     private val activeProject: ActiveProjectStore,
     private val appAgentTools: AppAgentTools,
+    private val godotAgentTools: com.legion.orion.agent.GodotAgentTools,
     private val controller: InferenceController,
     @ApplicationContext private val appContext: Context,
     private val claudeCodeSessionDao: ClaudeCodeSessionDao,
@@ -188,7 +189,7 @@ class ChatViewModel @Inject constructor(
     private var localSessionChatId: String? = null
     private var localSessionPrimed = false
 
-    private val registry by lazy { ToolRegistry(DefaultTools.list() + appAgentTools.list()) }
+    private val registry by lazy { ToolRegistry(DefaultTools.list() + appAgentTools.list() + godotAgentTools.list()) }
     private var projectId: String? = null
 
     // ── Claude Code (real CLI) ──

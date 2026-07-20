@@ -88,3 +88,19 @@ coverage/
 !app/src/main/res/**/*.jpg
 !app/src/main/res/**/*.jpeg
 !app/src/main/res/**/*.webp
+
+# Local database snapshots created while diagnosing device sessions
+diag-*.db
+*.db-shm
+*.db-wal
+
+# Godot native-bridge build dependencies and SCons outputs. The packaged bridge
+# binaries under runtime/godot/src/main are intentionally versioned separately.
+runtime/godot/bridge-native/godot-cpp/
+runtime/godot/bridge-native/bin/
+runtime/godot/bridge-native/.sconsign*
+runtime/godot/bridge-native/src/*.os
+
+# Superseded template-flavor engine artifact. Orion uses the editor-capable
+# godot-tools AAR for both editor and game-preview modes.
+runtime/godot/repo/org/godotengine/godot/

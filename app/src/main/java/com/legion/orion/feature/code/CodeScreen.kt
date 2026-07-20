@@ -58,9 +58,11 @@ import com.legion.orion.feature.chat.ChatMode
 import com.legion.orion.feature.chat.ChatViewModel
 import com.legion.orion.feature.chat.ClaudeCodeOptionsSheet
 import com.legion.orion.feature.chat.CommandHeader
+import com.legion.orion.feature.chat.GodotChatCard
 import com.legion.orion.feature.chat.HistorySheet
 import com.legion.orion.feature.chat.ModelSheet
 import com.legion.orion.feature.editor.EditorViewModel
+import com.legion.orion.feature.engine.EngineViewModel
 import com.legion.orion.feature.workspace.DevTool
 import com.legion.orion.feature.workspace.DevToolPanel
 import com.legion.orion.feature.workspace.WorkspaceViewModel
@@ -97,6 +99,7 @@ fun CodeScreen(
     chatVm: ChatViewModel = hiltViewModel(),
     workspaceVm: WorkspaceViewModel = hiltViewModel(),
     editorVm: EditorViewModel = hiltViewModel(),
+    engineVm: EngineViewModel = hiltViewModel(),
 ) {
     val ui by chatVm.ui.collectAsStateWithLifecycle()
     val messages by chatVm.messages.collectAsStateWithLifecycle()
@@ -104,6 +107,9 @@ fun CodeScreen(
     val engine by chatVm.engineState.collectAsStateWithLifecycle()
     val availableProjects by chatVm.availableProjects.collectAsStateWithLifecycle()
     val permissionRequests by chatVm.pendingClaudePermissions.collectAsStateWithLifecycle()
+    val godotState by engineVm.godotState.collectAsStateWithLifecycle()
+    val godotProjectPath by engineVm.godotProjectPath.collectAsStateWithLifecycle()
+    val godotPresentation by engineVm.godotPresentation.collectAsStateWithLifecycle()
 
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
 
@@ -146,6 +152,19 @@ fun CodeScreen(
                         messages = messages,
                         vm = chatVm,
                         modifier = Modifier.weight(0.42f).fillMaxHeight(),
+                        bottomContent = { imeVisible ->
+                            GodotChatCard(
+                                state = godotState,
+                                projectPath = godotProjectPath,
+                                presentation = godotPresentation,
+                                onOpenEditor = engineVm::launchGodotEditor,
+                                onExpand = engineVm::expandGodot,
+                                onReturnToChat = engineVm::returnGodotToChat,
+                                onStop = engineVm::stopGodot,
+                                previewHeight = 120.dp,
+                                temporarilyCollapsed = imeVisible,
+                            )
+                        },
                     )
                     Box(
                         Modifier
@@ -175,7 +194,24 @@ fun CodeScreen(
                 PanelStrip(selected = panel, onSelect = { panelOrdinal = it.ordinal })
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     if (panel == CodePanel.CHAT) {
-                        ChatContent(ui = ui, messages = messages, vm = chatVm, modifier = Modifier.fillMaxSize())
+                        ChatContent(
+                            ui = ui,
+                            messages = messages,
+                            vm = chatVm,
+                            modifier = Modifier.fillMaxSize(),
+                            bottomContent = { imeVisible ->
+                                GodotChatCard(
+                                    state = godotState,
+                                    projectPath = godotProjectPath,
+                                    presentation = godotPresentation,
+                                    onOpenEditor = engineVm::launchGodotEditor,
+                                    onExpand = engineVm::expandGodot,
+                                    onReturnToChat = engineVm::returnGodotToChat,
+                                    onStop = engineVm::stopGodot,
+                                    temporarilyCollapsed = imeVisible,
+                                )
+                            },
+                        )
                     } else if (panel == CodePanel.TOOLS) {
                         Column(Modifier.fillMaxSize()) {
                             ToolStrip(
@@ -256,6 +292,7 @@ fun CodeScreen(
                 onDecision = { decision -> chatVm.respondToClaudePermission(request.id, decision) },
             )
         }
+
     }
 }
 

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Godot has no safe in-process teardown/reinit (extensive static/global state, confirmed
+             by a Godot co-founder reviewing a failed iOS reinit attempt, godotengine/godot#99705) —
+             runs in its own process, same rationale as :node, but "stop" here means a real process
+             kill (see GodotProcessController.teardown / GodotEmbedService), not just finishing the
+             activity or stopping the service. -->
+        <activity
+            android:name=".GodotHostActivity"
+            android:process=":godot"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density" />
+
+        <!-- Uses the same editor-capable libgodot_android.so as the preview activity. -->
+        <activity
+            android:name=".GodotEditorActivity"
+            android:process=":godot_editor"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="false"
+            android:screenOrientation="sensorLandscape"
+            android:taskAffinity=""
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density" />
+
+        <service
+            android:name=".GodotEmbedService"
+            android:process=":godot"
+            android:exported="false" />
+
+        <!-- Godot's own cross-process embedding component (org.godotengine.godot.service,
+             from the vendored AAR) — pairs with RemoteGodotFragment in :app via Messenger IPC +
+             SurfaceControlViewHost. Declared in the SAME :godot process as GodotHostActivity above
+             (only one Godot engine instance is supported per process — don't run both at once). -->
+        <service
+            android:name="org.godotengine.godot.service.GodotService"
+            android:process=":godot"
+            android:exported="false" />
+    </application>
+
+</manifest>

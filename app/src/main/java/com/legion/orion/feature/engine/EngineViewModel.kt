@@ -8,9 +8,15 @@ import androidx.lifecycle.viewModelScope
 import com.legion.orion.core.database.LocalModelDao
 import com.legion.orion.core.database.LocalModelEntity
 import com.legion.orion.core.datastore.SettingsRepository
+import com.legion.orion.data.project.ActiveProjectStore
+import com.legion.orion.data.project.ProjectManager
 import com.legion.orion.engine.mnn.MnnBackend
 import com.legion.orion.inference.InferenceController
 import com.legion.orion.inference.InferenceService
+import com.legion.orion.runtime.GodotController
+import com.legion.orion.runtime.GodotProcessController
+import com.legion.orion.runtime.godot.GodotEditorLaunch
+import com.legion.orion.runtime.godot.GodotProjectInstaller
 import com.legion.orion.server.ServerController
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.io.File
@@ -18,6 +24,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -75,11 +82,18 @@ class EngineViewModel @Inject constructor(
     private val controller: InferenceController,
     private val settings: SettingsRepository,
     private val serverController: ServerController,
+    private val godot: GodotProcessController,
+    private val godotBridge: GodotController,
+    private val projects: ProjectManager,
+    private val activeProject: ActiveProjectStore,
     localModelDao: LocalModelDao,
 ) : AndroidViewModel(application) {
 
     private val _ui = MutableStateFlow(EngineUiState())
     val ui = _ui.asStateFlow()
+
+    private val _bridgeStatus = MutableStateFlow("Not checked")
+    val bridgeStatus = _bridgeStatus.asStateFlow()
 
     val localModels = localModelDao.observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -101,6 +115,81 @@ class EngineViewModel @Inject constructor(
     val engineState = controller.state.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5_000), controller.state.value,
     )
+
+    val godotState = godot.state.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), godot.state.value,
+    )
+    val godotProjectPath = godot.projectPath.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), godot.projectPath.value,
+    )
+    val godotPresentation = godot.presentation.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000), godot.presentation.value,
+    )
+
+    /**
+     * G1 debug entry point: launches the full-screen Godot host running the bundled default
+     * project (runtime/godot's `src/main/assets/`, see [GodotProcessController]'s kdoc for why this
+     * can't yet point at an arbitrary project directory), so process isolation/lifecycle/
+     * renderer-tier can be exercised on-device ahead of the real per-project `DevTool.GAME` wiring
+     * (a later phase).
+     */
+    fun launchGodot() {
+        viewModelScope.launch { godot.startForProject(activeGodotDir(), fullscreen = true) }
+    }
+
+    /** Opens the complete Godot editor UI from the same tools engine used for game previews. */
+    fun launchGodotEditor() {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            val projectDir = GodotProjectInstaller.prepare(app, activeGodotDir())
+            app.startActivity(GodotEditorLaunch.intentFor(app, projectDir.absolutePath))
+        }
+    }
+
+    fun expandGodot() {
+        val path = godot.projectPath.value ?: return
+        viewModelScope.launch { godot.restart(File(path), fullscreen = true) }
+    }
+
+    fun returnGodotToChat() {
+        val path = godot.projectPath.value ?: return
+        viewModelScope.launch { godot.restart(File(path), fullscreen = false) }
+    }
+
+    fun stopGodot() {
+        viewModelScope.launch { godot.teardown() }
+    }
+
+    private suspend fun activeGodotDir(): File {
+        val id = activeProject.projectId.value
+        if (id != null) return projects.dirFor(id)
+        val existingGodot = projects.observeProjects().first().firstOrNull { it.stackType == "godot" }
+        val project = existingGodot ?: projects.createProject("Godot Game", "godot", "godot")
+        activeProject.set(project.id)
+        return projects.dirFor(project.id)
+    }
+
+    /**
+     * G3 debug entry point: exercises the GDExtension AI-control bridge's v1 read-only ops
+     * (ping/scene_tree/perf_snapshot) against the running :godot process, over the loopback NDJSON
+     * socket (see [GodotController]). Requires the embedded engine to already be running (either
+     * debug card above).
+     */
+    fun pingBridge() {
+        viewModelScope.launch {
+            _bridgeStatus.value = "Pinging…"
+            val ok = godotBridge.ping()
+            if (!ok) {
+                _bridgeStatus.value = "Ping failed (is the engine running?)"
+                return@launch
+            }
+            val perf = godotBridge.perfSnapshot()
+            val tree = godotBridge.sceneTree()
+            val fps = perf?.get("fps")?.toString() ?: "?"
+            val rootChildren = tree?.get("children")?.toString()?.let { "yes" } ?: "no"
+            _bridgeStatus.value = "pong=true, fps=$fps, scene_tree=$rootChildren"
+        }
+    }
 
     init {
         viewModelScope.launch {

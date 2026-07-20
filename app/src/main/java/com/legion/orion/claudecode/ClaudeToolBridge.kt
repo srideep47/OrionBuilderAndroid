@@ -6,6 +6,8 @@ import com.legion.orion.automation.DeviceAutomationController
 import com.legion.orion.build.ApkBuildController
 import com.legion.orion.build.AndroidProjectLocator
 import com.legion.orion.feature.preview.PreviewController
+import com.legion.orion.runtime.GodotController
+import com.legion.orion.runtime.GodotProcessController
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.net.InetAddress
@@ -20,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -81,6 +84,8 @@ class ClaudeToolBridge @Inject constructor(
     private val preview: PreviewController,
     private val device: DeviceAutomationController,
     private val apkBuilder: ApkBuildController,
+    private val godot: GodotController,
+    private val godotProcess: GodotProcessController,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
@@ -285,9 +290,164 @@ class ClaudeToolBridge @Inject constructor(
                     context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     success("Launched $packageName")
                 }
+                "godot_launch" -> {
+                    check(godotProcess.startForProject(projectDir(request), fullscreen = false)) {
+                        "Godot engine failed to start (see logcat tag GodotProcessController)"
+                    }
+                    // Process-alive only means Godot's Android service exists. The Compose host is
+                    // mounted in reaction to that state, and only then does the engine create its
+                    // frame loop/control socket. Do not hand control back to Claude in that gap: it
+                    // otherwise invents monitor/wakeup loops while repeatedly hitting a dead bridge.
+                    var bridgeReady = false
+                    for (attempt in 0 until 4) {
+                        if (godot.ping()) {
+                            bridgeReady = true
+                            break
+                        }
+                        if (attempt < 3) delay(500)
+                    }
+                    check(bridgeReady) {
+                        "Godot process started, but its embedded preview/AI bridge did not become ready within about 22 seconds. Stop and relaunch Godot once."
+                    }
+                    success("Godot engine started; embedded preview and AI bridge are ready.")
+                }
+                "godot_stop" -> {
+                    check(godotProcess.teardown()) { "Godot engine did not confirm teardown in time" }
+                    success("Godot engine stopped.")
+                }
+                "godot_status" -> {
+                    if (!godotProcess.isProcessAlive()) {
+                        success("Godot engine is not running. Call godot_launch first.")
+                    } else if (godot.ping()) {
+                        success("Godot engine is running; bridge responding normally.")
+                    } else {
+                        failure("Godot process is alive but the bridge did not respond (still booting, or hosting UI backgrounded).")
+                    }
+                }
+                "godot_scene_tree" -> godotOp("scene_tree")
+                "godot_capabilities" -> godotOp("capabilities")
+                "godot_classdb" -> godotOp(
+                    "classdb",
+                    buildJsonObject { request.str("class_name")?.let { put("class_name", it) } },
+                )
+                "godot_save_scene" -> godotOp(
+                    "save_scene",
+                    buildJsonObject { request.str("path")?.let { put("path", it) } },
+                )
+                "godot_change_scene" -> godotOp(
+                    "change_scene",
+                    buildJsonObject { put("path", request.str("path") ?: error("Missing path")) },
+                )
+                "godot_project_setting" -> godotOp(
+                    "project_setting",
+                    buildJsonObject {
+                        put("name", request.str("name") ?: error("Missing name"))
+                        request["value"]?.let { put("value", it) }
+                    },
+                )
+                "godot_input_actions" -> godotOp("input_actions")
+                "godot_screenshot" -> {
+                    // The bridge always saves to a fixed app-internal path (outside the proot
+                    // bind-mount, since the running Godot project is this module's own bundled
+                    // default project, not "the current Claude Code project directory" the way
+                    // preview_*/device_* screenshots are) — copy it into THIS project's .orion/ dir,
+                    // same convention as preview_screenshot/device_screenshot, so Read can reach it.
+                    val bridgePath = godot.screenshot() ?: error("Screenshot failed — is godot_launch running?")
+                    val out = outputFile(request, "godot.png")
+                    File(bridgePath).copyTo(out, overwrite = true)
+                    success("Saved ${guestPath(out, request)} (${out.length()} bytes). Use Read on this PNG to inspect the actual running game.")
+                }
+                "godot_get_property" -> godotOp(
+                    "get_property",
+                    buildJsonObject {
+                        put("path", request.str("path") ?: error("Missing path"))
+                        put("property", request.str("property") ?: error("Missing property"))
+                    },
+                )
+                "godot_set_property" -> godotOp(
+                    "set_property",
+                    buildJsonObject {
+                        put("path", request.str("path") ?: error("Missing path"))
+                        put("property", request.str("property") ?: error("Missing property"))
+                        put("value", request["value"] ?: error("Missing value"))
+                    },
+                )
+                "godot_call_method" -> godotOp(
+                    "call_method",
+                    buildJsonObject {
+                        put("path", request.str("path") ?: error("Missing path"))
+                        put("method", request.str("method") ?: error("Missing method"))
+                        put("args", request["args"] as? JsonArray ?: JsonArray(emptyList()))
+                    },
+                )
+                "godot_list_properties" -> godotOp(
+                    "list_properties",
+                    buildJsonObject { put("path", request.str("path") ?: error("Missing path")) },
+                )
+                "godot_list_methods" -> godotOp(
+                    "list_methods",
+                    buildJsonObject { put("path", request.str("path") ?: error("Missing path")) },
+                )
+                "godot_create_node" -> godotOp(
+                    "create_node",
+                    buildJsonObject {
+                        put("parent_path", request.str("parent_path") ?: error("Missing parent_path"))
+                        put("class_name", request.str("class_name") ?: error("Missing class_name"))
+                        request.str("name")?.let { put("name", it) }
+                    },
+                )
+                "godot_delete_node" -> godotOp(
+                    "delete_node",
+                    buildJsonObject { put("path", request.str("path") ?: error("Missing path")) },
+                )
+                "godot_set_paused" -> godotOp(
+                    "set_paused",
+                    buildJsonObject { put("paused", request.str("paused")?.toBooleanStrictOrNull() ?: error("Missing paused")) },
+                )
+                "godot_step" -> godotOp(
+                    "step",
+                    buildJsonObject { put("frames", (request.number("frames") ?: 1f).toInt()) },
+                )
+                "godot_simulate_input" -> godotOp(
+                    "simulate_input",
+                    buildJsonObject {
+                        put("type", request.str("type") ?: error("Missing type"))
+                        request["keycode"]?.let { put("keycode", it) }
+                        request["button_index"]?.let { put("button_index", it) }
+                        // The command envelope already owns `action` (godot_simulate_input). The
+                        // shell shim stores the requested InputMap action separately to prevent it
+                        // from overwriting the command before this dispatch point.
+                        request.str("input_action")?.let { put("input_action", it) }
+                        request["pressed"]?.let { put("pressed", it) }
+                        request["position"]?.let { put("position", it) }
+                        request["relative"]?.let { put("relative", it) }
+                        request["strength"]?.let { put("strength", it) }
+                    },
+                )
+                "godot_reload_script" -> godotOp(
+                    "reload_script",
+                    buildJsonObject {
+                        put("path", request.str("path") ?: error("Missing path"))
+                        put("script_path", request.str("script_path") ?: error("Missing script_path"))
+                    },
+                )
                 else -> failure("Unknown action '$action'")
             }
         }.getOrElse { failure(it.message ?: it::class.java.simpleName) }
+    }
+
+    /**
+     * Shared plumbing for every `godot_*` G4 op: forwards to [GodotController.call] and surfaces the
+     * bridge's *raw* response verbatim (including its own `error` message on an op-level failure) —
+     * Claude reads exactly what `orion_bridge_server_ops.cpp` returned, same as the local agent's
+     * `GodotAgentTools` does via `bridgeResult()`. Distinct from a transport-level failure (bridge
+     * unreachable/timeout), which throws and is caught by the surrounding `runCatching` like every
+     * other action here.
+     */
+    private suspend fun godotOp(action: String, params: JsonObject = JsonObject(emptyMap())): JsonObject {
+        val response = godot.call(action, params)
+            ?: error("Godot bridge unreachable (connection failed or timed out) — is the engine running? Call godot_launch first.")
+        return if (response.bool("ok")) success(response.toString()) else failure(response.toString())
     }
 
     private fun projectDir(request: JsonObject): File {
@@ -413,6 +573,7 @@ class ClaudeToolBridge @Inject constructor(
     private fun JsonObject.number(key: String): Float? = (this[key] as? JsonPrimitive)?.floatOrNull
     private fun JsonObject.long(key: String): Long? = (this[key] as? JsonPrimitive)?.longOrNull
     private fun JsonObject.double(key: String): Double? = (this[key] as? JsonPrimitive)?.doubleOrNull
+    private fun JsonObject.bool(key: String): Boolean = (this[key] as? JsonPrimitive)?.content == "true"
 
     companion object {
         private const val MAX_REQUEST_CHARS = 128_000

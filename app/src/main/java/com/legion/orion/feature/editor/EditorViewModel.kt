@@ -131,7 +131,11 @@ class EditorViewModel @Inject constructor(
             val project = projects.createProject(
                 name.ifBlank { "New project" },
                 templateId = templateId,
-                stack = if (templateId == "android-kt") "android" else "web",
+                stack = when (templateId) {
+                    "godot" -> "godot"
+                    "android-kt" -> "android"
+                    else -> "web"
+                },
             )
             activeProject.set(project.id)
             loadProject(project.id)

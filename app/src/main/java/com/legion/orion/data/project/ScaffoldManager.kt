@@ -12,7 +12,7 @@ class ScaffoldManager @Inject constructor(
     @ApplicationContext private val context: Context,
 ) {
     /** Available template ids (must match asset folder names). */
-    val templates = listOf("vite-react-ts", "static-web", "android-kt")
+    val templates = listOf("godot", "vite-react-ts", "static-web", "android-kt")
 
     fun scaffold(templateId: String, destDir: File) {
         require(templateId in templates) { "Unknown template: $templateId" }

@@ -59,6 +59,13 @@ android {
     androidResources {
         // The bundled toolchain archives are already xz-compressed; don't let aapt re-deflate them.
         noCompress += "xz"
+        // AAPT's default ignoreAssetsPattern excludes any dot-prefixed path (the general ".*" rule),
+        // which would silently drop the bundled Godot project's .godot/ cache — specifically
+        // extension_list.cfg, which is how the engine discovers orion_bridge.gdextension at all
+        // (normally auto-maintained by the editor; this project is hand-authored, never opened in
+        // one). Same default list minus the blanket ".*" clause, rather than relying on a "!"
+        // override's precedence against it.
+        ignoreAssetsPattern = "!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~"
     }
     packaging {
         resources {
@@ -79,6 +86,29 @@ android {
         jniLibs {
             // 16KB page alignment is required for Android 15+; keep .so uncompressed-friendly.
             useLegacyPackaging = false
+            // engine:mnn and the vendored godot-lib AAR each bundle their own libc++_shared.so for
+            // arm64-v8a; both are standard, ABI-stable NDK toolchain runtimes, so picking either is
+            // safe — this just resolves the otherwise-fatal duplicate-path merge conflict.
+            pickFirsts += setOf("**/libc++_shared.so")
+        }
+    }
+}
+
+// AGP's asset-merge step (mergeXAssets) drops dot-prefixed paths regardless of
+// androidResources.ignoreAssetsPattern (that only governs the later aapt2 packaging step, which
+// never sees a path the merge step already dropped) — confirmed by inspecting the merge task's own
+// output directory. This silently drops runtime/godot's bundled Godot project's `.godot/` cache
+// (specifically extension_list.cfg, how the engine discovers orion_bridge.gdextension at all,
+// since this project is hand-authored and never opened in the real editor, which normally
+// maintains that file). Copy it back in after the merge task's own copy logic has run.
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+    doLast {
+        val dotGodotSrc = file("$rootDir/runtime/godot/src/main/assets/.godot")
+        if (!dotGodotSrc.exists()) return@doLast
+        outputs.files.files.forEach { outDir ->
+            if (outDir.isDirectory) {
+                dotGodotSrc.copyRecursively(File(outDir, ".godot"), overwrite = true)
+            }
         }
     }
 }
@@ -97,9 +127,13 @@ dependencies {
     implementation(project(":infra:git"))
     implementation(project(":infra:p2p"))
     implementation(project(":runtime:node"))
+    implementation(project(":runtime:godot"))
+    // runtime:godot uses one editor-capable tools AAR for both editor and game-preview modes, so
+    // this APK contains exactly one libgodot_android.so. Do not add runtime:godot-editor too.
     implementation(project(":runtime:buildtools"))
 
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.fragment.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

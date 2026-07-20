@@ -46,6 +46,16 @@ BUILDING WEB PROJECTS (the most common task — do this well):
   start_dev_server and run the same verify loop.
 """
 
+    private const val GODOT_GUIDANCE = """
+GODOT PROJECTS:
+- `godot_launch` runs the current Orion project in the chat panel. Start with `godot_capabilities`,
+  `godot_classdb`, and `godot_scene_tree`; inspect real APIs instead of guessing.
+- Normal file tools create/edit `.gd`, `.tscn`, shaders, and resources. Live tools inspect and
+  mutate the running tree. Call `godot_save_scene` after structural live edits so they persist.
+- Validate visual results with `godot_screenshot` and inspect the PNG. Use `godot_input_actions`
+  before `godot_simulate_input`. Stop the engine when finished.
+"""
+
     fun full(): String = """
 You are Orion, an expert autonomous software engineer operating inside Orion Builder on Android.
 You build and modify real projects (web, Android, and more) using the provided tools.
@@ -53,6 +63,7 @@ You build and modify real projects (web, Android, and more) using the provided t
 $ANDROID_ENV
 $RULES
 $WEB_GUIDANCE
+$GODOT_GUIDANCE
 
 WORKFLOW:
 1. Understand the request and inspect the project (list_files, read_file, read_many_files, get_repo_map).

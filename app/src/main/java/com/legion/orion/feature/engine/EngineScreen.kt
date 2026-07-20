@@ -48,15 +48,20 @@ import com.legion.orion.core.design.ScreenHeader
 import com.legion.orion.core.design.glass
 import com.legion.orion.engine.mnn.MnnBackend
 import com.legion.orion.inference.EngineState
+import com.legion.orion.runtime.GodotProcessState
 
 @Composable
 fun EngineScreen(vm: EngineViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val engine by vm.engineState.collectAsStateWithLifecycle()
+    val godotState by vm.godotState.collectAsStateWithLifecycle()
+    val godotProjectPath by vm.godotProjectPath.collectAsStateWithLifecycle()
+    val bridgeStatus by vm.bridgeStatus.collectAsStateWithLifecycle()
     val serverRunning by vm.serverRunning.collectAsStateWithLifecycle()
     val localModels by vm.localModels.collectAsStateWithLifecycle()
     val memoryEstimate = vm.memoryEstimate()
     var showAdvanced by rememberSaveable { mutableStateOf(false) }
+    var showEmbeddedGodot by rememberSaveable { mutableStateOf(false) }
 
     Column(Modifier.fillMaxSize()) {
         LazyColumn(
@@ -72,6 +77,15 @@ fun EngineScreen(vm: EngineViewModel = hiltViewModel()) {
             item { ServerCard(serverRunning, vm.serverPort(), vm::toggleServer) }
             item { MemoryCard(memoryEstimate) }
             item { HardwareCard() }
+            item { GodotCard(godotState, vm::launchGodotEditor, vm::launchGodot, vm::stopGodot) }
+            item { GodotBridgeCard(bridgeStatus, vm::pingBridge) }
+            item {
+                GodotEmbedCard(
+                    expanded = showEmbeddedGodot,
+                    onToggle = { showEmbeddedGodot = !showEmbeddedGodot },
+                    projectPath = godotProjectPath,
+                )
+            }
             item {
                 GhostButton(
                     text = if (showAdvanced) "Hide generation settings" else "Advanced generation settings",
@@ -191,6 +205,115 @@ private fun HardwareCard() {
                 "Fallback chain: CPU → OpenCL → Vulkan → QNN",
                 style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted,
             )
+        }
+    }
+}
+
+/**
+ * G1 debug card: launches/stops the embedded Godot engine in its own :godot process against a
+ * throwaway scratch project. Not the real per-project game surface (that's DevTool.GAME, a later
+ * phase) — this exists purely to exercise process isolation/lifecycle/renderer-tier on-device.
+ */
+@Composable
+private fun GodotCard(
+    state: GodotProcessState,
+    onOpenEditor: () -> Unit,
+    onRunPreview: () -> Unit,
+    onStop: () -> Unit,
+) {
+    GlassCard {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Eyebrow("Godot development")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Godot 4 editor + live preview", style = MaterialTheme.typography.titleMedium,
+                    color = Cosmos.Text, modifier = Modifier.weight(1f),
+                )
+                CosmosBadge(
+                    when (state) {
+                        GodotProcessState.Idle -> "Idle"
+                        GodotProcessState.Starting -> "Starting…"
+                        is GodotProcessState.Running -> "Running"
+                        GodotProcessState.Stopping -> "Stopping…"
+                    },
+                    if (state is GodotProcessState.Running) BadgeTone.Green else BadgeTone.Neutral,
+                )
+            }
+            Text(
+                "Open Editor shows the complete Godot UI. Run Game Preview starts the separate " +
+                    "agent-controlled engine used by chat and its embedded live panel.",
+                style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted,
+            )
+            GlowButton(text = "Open Godot Editor", onClick = onOpenEditor, modifier = Modifier.fillMaxWidth())
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                GhostButton(
+                    text = "Run Game Preview",
+                    onClick = onRunPreview,
+                    enabled = state is GodotProcessState.Idle,
+                    modifier = Modifier.weight(1f),
+                )
+                GhostButton(
+                    text = "Stop Preview",
+                    onClick = onStop,
+                    enabled = state is GodotProcessState.Running,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * G3 debug card: exercises the GDExtension AI-control bridge (OrionBridgeServer) over its loopback
+ * NDJSON socket — ping/scene_tree/perf_snapshot, the v1 read-only op set. Requires the engine to
+ * already be running via one of the debug cards above.
+ */
+@Composable
+private fun GodotBridgeCard(status: String, onPing: () -> Unit) {
+    GlassCard {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Eyebrow("Godot AI-control bridge (debug, G3)")
+            Text(
+                "GDExtension singleton, NDJSON over loopback :8139 — ping / scene_tree / perf_snapshot.",
+                style = MaterialTheme.typography.titleMedium, color = Cosmos.Text,
+            )
+            Text(status, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted)
+            GhostButton(text = "Ping bridge", onClick = onPing, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+/**
+ * G2 debug card: toggles [GodotEmbedPanel] inline — Godot's own RemoteGodotFragment rendering in
+ * the :godot process via Messenger IPC + SurfaceControlViewHost, shown inside this Compose screen
+ * instead of a full-screen task. Don't open alongside the G1 debug card above — both drive the same
+ * single Godot instance the :godot process supports.
+ */
+@Composable
+private fun GodotEmbedCard(expanded: Boolean, onToggle: () -> Unit, projectPath: String?) {
+    GlassCard {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Eyebrow("Godot embedded panel (debug, G2)")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Compose-embedded engine", style = MaterialTheme.typography.titleMedium,
+                    color = Cosmos.Text, modifier = Modifier.weight(1f),
+                )
+                CosmosBadge(if (expanded) "Shown" else "Hidden", if (expanded) BadgeTone.Green else BadgeTone.Neutral)
+            }
+            Text(
+                "Renders via RemoteGodotFragment + SurfaceControlViewHost, still in the isolated " +
+                    ":godot process. Don't open together with the full-screen debug card above.",
+                style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted,
+            )
+            GhostButton(
+                text = if (expanded) "Hide panel" else "Show panel",
+                onClick = onToggle,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (expanded && projectPath != null) {
+                GodotEmbedPanel(projectPath, modifier = Modifier.fillMaxWidth().height(320.dp))
+            }
         }
     }
 }

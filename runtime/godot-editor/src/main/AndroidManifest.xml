@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Same isolation rationale as runtime:godot's GodotHostActivity (Godot has no safe
+             in-process teardown/reinit) — a SEPARATE process from ":godot" so the editor and the
+             AI-driven game engine can never collide (both are, individually, "one Godot instance
+             per process"; running them in the same process would violate that). Only one of
+             EditorHostActivity / GodotHostActivity is expected to be running at a time in practice
+             (a human editing vs. an agent playtesting), but isolating the process means a crash in
+             one can never take down the other. -->
+        <activity
+            android:name=".EditorHostActivity"
+            android:process=":godot_editor"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density" />
+    </application>
+
+</manifest>

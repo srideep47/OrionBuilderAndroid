@@ -83,7 +83,12 @@ class ClaudeCodeProcess(
             append(" --effort ").append(effort)
             append(" --verbose")
             append(" --settings /root/.claude/orion-settings.json")
-            append(" --append-system-prompt ").append(shq(PREVIEW_SYSTEM_PROMPT))
+            // Fresh Claude projects intentionally begin as unclassified empty directories. Godot's
+            // scaffold is installed by `godot-launch`, so gating these instructions on an existing
+            // stackType/project.godot creates a catch-22. The idle bridge costs nothing; advertise it
+            // to every project and let Claude use it only when the request is about Godot.
+            val systemPrompt = PREVIEW_SYSTEM_PROMPT + " " + GODOT_SYSTEM_PROMPT
+            append(" --append-system-prompt ").append(shq(systemPrompt))
             if (model != null) append(" --model ").append(model)
             if (resume != null) append(" --resume ").append(resume)
         }
@@ -126,6 +131,42 @@ class ClaudeCodeProcess(
                 "/root/project/.orion/device.png. Never claim visual UI verification without actually " +
                 "reading the screenshot and checking the relevant UI state. Run orion-tool help for syntax."
 
+        private const val GODOT_SYSTEM_PROMPT =
+            "This project has an embedded Godot game engine (isolated process, zero footprint when " +
+                "idle) with full AI control via orion-tool. Every orion-tool operation is a Bash/shell " +
+                "command, not a native Claude tool: invoke it directly with Bash and NEVER use ToolSearch " +
+                "to look for Godot tools. Godot intentionally is NOT a godot/godot4 executable inside the " +
+                "Linux proot and is NOT an MCP server: it runs in Orion's Android engine process, so never " +
+                "use which/command -v or inspect .mcp.json to decide whether it is available. Shell command " +
+                "names use hyphens (for example `orion-tool godot-launch`), even when the user's prompt uses " +
+                "tool-style underscore names such as godot_launch. Do not create Monitor or ScheduleWakeup loops for engine startup; " +
+                "godot-launch itself waits for the bridge and either returns ready or a concrete error. " +
+                "Workflow: orion-tool godot-launch starts " +
+                "the active Orion project (required first); godot-capabilities reports exact bridge " +
+                "operations and godot-classdb [class] exposes the live ClassDB, so discover APIs " +
+                "instead of guessing. orion-tool godot-scene-tree lists every live node's path/class " +
+                "under /root — do this before touching anything. orion-tool godot-list-properties " +
+                "<path> and godot-list-methods <path> show exactly what a node supports before you " +
+                "call godot-get-property/godot-set-property/godot-call-method on it. " +
+                "godot-set-property accepts JSON values, including [x,y,z] arrays for " +
+                "Vector2/Vector3/Color properties (auto-converted). godot-create-node " +
+                "<parent_path> <class_name> [name] adds any built-in Godot class as a child; for " +
+                "custom scripted behavior, write a .gd file with the normal file tools (project-relative, " +
+                "under res://) then attach it with godot-reload-script <path> <script_path> — this " +
+                "snapshots and restores the node's property values across the script swap, so " +
+                "in-progress state survives. godot-delete-node removes a node. godot-set-paused " +
+                "true/false + godot-step [frames] lets you advance the running game frame-by-frame " +
+                "for precise debugging. godot-simulate-input injects key/mouse/action input as if a " +
+                "player pressed it (see 'orion-tool help' for its exact argument forms). " +
+                "godot-screenshot then Read the PNG to see the actual rendered game — never claim a " +
+                "visual game-dev result without doing this. godot-status checks whether the engine " +
+                "and its bridge are responding. After structural edits call godot-save-scene so " +
+                "created/deleted nodes persist; use godot-project-setting for project.godot values. " +
+                "godot-stop hard-kills it when you're done so it costs " +
+                "nothing while idle. AI-generated game content must live as new scenes/scripts inside " +
+                "this one project (Android security policy blocks loading engine code from any other " +
+                "project directory) — never try to create a second separate Godot project."
+
         const val ORION_TOOL_CLIENT = """#!/usr/bin/python3
 import json, os, socket, sys
 
@@ -149,14 +190,39 @@ HELP = '''Orion visual/device QA commands:
   orion-tool android-launch [package]
   orion-tool session-status              # internal Claude status-line transport
   orion-tool permission-request          # internal permission UI transport
-Screenshots default to .orion/preview.png and .orion/device.png. Read the PNG afterward.'''
+  orion-tool godot-launch | godot-stop | godot-status
+  orion-tool godot-scene-tree
+  orion-tool godot-screenshot [relative.png]
+  orion-tool godot-get-property <path> <property>
+  orion-tool godot-set-property <path> <property> <json-value>
+  orion-tool godot-call-method <path> <method> [json-args-array]
+  orion-tool godot-list-properties <path>
+  orion-tool godot-list-methods <path>
+  orion-tool godot-create-node <parent-path> <class-name> [name]
+  orion-tool godot-delete-node <path>
+  orion-tool godot-set-paused <true|false>
+  orion-tool godot-step [frames]
+  orion-tool godot-simulate-input type=action action=jump pressed=true [strength=1.0]
+  orion-tool godot-simulate-input type=key keycode=87 pressed=true
+  orion-tool godot-reload-script <path> <script-path>
+  orion-tool godot-capabilities
+  orion-tool godot-classdb [class-name]
+  orion-tool godot-save-scene [res://path.tscn]
+  orion-tool godot-change-scene <res://path.tscn>
+  orion-tool godot-project-setting <name> [json-value]
+  orion-tool godot-input-actions
+Screenshots default to .orion/preview.png and .orion/device.png and .orion/godot.png. Read the PNG afterward.'''
 
 if len(sys.argv) < 2 or sys.argv[1] in ('help', '--help', '-h'):
     print(HELP); sys.exit(0)
 cmd = sys.argv[1].replace('-', '_')
 args = sys.argv[2:]
 req = {'action': cmd, 'token': os.environ.get('ORION_TOOL_TOKEN',''), 'project': os.environ.get('ORION_PROJECT_HOST','')}
-if cmd in ('preview_screenshot','device_screenshot') and args: req['output'] = args[0]
+def parse_val(s):
+    try: return json.loads(s)
+    except Exception: return s
+
+if cmd in ('preview_screenshot','device_screenshot','godot_screenshot') and args: req['output'] = args[0]
 elif cmd == 'preview_eval': req['expression'] = ' '.join(args)
 elif cmd == 'preview_navigate': req['url'] = args[0] if args else ''
 elif cmd == 'device_click': req['selector'] = ' '.join(args)
@@ -181,6 +247,51 @@ elif cmd == 'device_wait':
 elif cmd == 'device_global': req['global'] = args[0] if args else ''
 elif cmd == 'android_build': req['install'] = str('--install' in args).lower()
 elif cmd == 'android_launch' and args: req['package'] = args[0]
+elif cmd == 'godot_get_property':
+    if len(args) != 2: print('godot-get-property needs path property', file=sys.stderr); sys.exit(2)
+    req['path'], req['property'] = args[0], args[1]
+elif cmd == 'godot_set_property':
+    if len(args) != 3: print('godot-set-property needs path property json-value', file=sys.stderr); sys.exit(2)
+    req['path'], req['property'], req['value'] = args[0], args[1], parse_val(args[2])
+elif cmd == 'godot_call_method':
+    if len(args) < 2: print('godot-call-method needs path method [json-args-array]', file=sys.stderr); sys.exit(2)
+    req['path'], req['method'] = args[0], args[1]
+    req['args'] = json.loads(args[2]) if len(args) > 2 else []
+elif cmd in ('godot_list_properties', 'godot_list_methods', 'godot_delete_node'):
+    if not args: print(cmd.replace('_','-') + ' needs path', file=sys.stderr); sys.exit(2)
+    req['path'] = args[0]
+elif cmd == 'godot_create_node':
+    if len(args) < 2: print('godot-create-node needs parent-path class-name [name]', file=sys.stderr); sys.exit(2)
+    req['parent_path'], req['class_name'] = args[0], args[1]
+    if len(args) > 2: req['name'] = args[2]
+elif cmd == 'godot_set_paused':
+    if not args: print('godot-set-paused needs true|false', file=sys.stderr); sys.exit(2)
+    req['paused'] = args[0].lower()
+elif cmd == 'godot_step':
+    req['frames'] = int(args[0]) if args else 1
+elif cmd == 'godot_simulate_input':
+    if not args: print('godot-simulate-input needs type=... [key=value ...]', file=sys.stderr); sys.exit(2)
+    for kv in args:
+        if '=' not in kv:
+            print('expected key=value, got: ' + kv, file=sys.stderr); sys.exit(2)
+        k, v = kv.split('=', 1)
+        # `action` already identifies the bridge command at the protocol envelope level. Keep the
+        # InputMap action in a distinct field so `action=jump` cannot replace
+        # `action=godot_simulate_input` before dispatch.
+        if k == 'action': k = 'input_action'
+        req[k] = parse_val(v)
+elif cmd == 'godot_reload_script':
+    if len(args) != 2: print('godot-reload-script needs path script-path', file=sys.stderr); sys.exit(2)
+    req['path'], req['script_path'] = args[0], args[1]
+elif cmd == 'godot_classdb' and args: req['class_name'] = args[0]
+elif cmd == 'godot_save_scene' and args: req['path'] = args[0]
+elif cmd == 'godot_change_scene':
+    if not args: print('godot-change-scene needs res://path.tscn', file=sys.stderr); sys.exit(2)
+    req['path'] = args[0]
+elif cmd == 'godot_project_setting':
+    if not args: print('godot-project-setting needs name [json-value]', file=sys.stderr); sys.exit(2)
+    req['name'] = args[0]
+    if len(args) > 1: req['value'] = parse_val(args[1])
 elif cmd in ('session_status', 'permission_request'):
     try: req['data'] = json.load(sys.stdin)
     except Exception as e:

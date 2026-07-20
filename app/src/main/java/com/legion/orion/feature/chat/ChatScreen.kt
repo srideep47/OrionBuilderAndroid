@@ -253,9 +253,11 @@ internal fun ChatContent(
     messages: List<UiMessage>,
     vm: ChatViewModel,
     modifier: Modifier = Modifier,
+    bottomContent: (@Composable (imeVisible: Boolean) -> Unit)? = null,
 ) {
     val listState = rememberLazyListState()
     var claudeUsageExpanded by rememberSaveable { mutableStateOf(true) }
+    var followLatest by remember { mutableStateOf(true) }
     val bottomChrome = LocalBottomChromeHeight.current
     // The floating nav pill is covered by the keyboard while it's up, so the extra clearance
     // reserved for it becomes dead space between the input bar and the keyboard — only reserve it
@@ -269,8 +271,23 @@ internal fun ChatContent(
     val lastMessageShape = messages.lastOrNull()?.parts?.let { parts ->
         parts.size to parts.sumOf { it.text.length + (it.tool?.status?.length ?: 0) }
     }
+    // Follow streaming output only while the user is at the true bottom. The old implementation
+    // aligned the last message's TOP on every delta/status change; for a reply taller than the
+    // viewport that looked like the chat jumped back upward whenever the user reached its bottom.
+    val listScrolling = listState.isScrollInProgress
+    LaunchedEffect(listScrolling) {
+        if (!listScrolling) {
+            val layout = listState.layoutInfo
+            followLatest = layout.totalItemsCount == 0 ||
+                layout.visibleItemsInfo.lastOrNull()?.index == layout.totalItemsCount - 1
+        }
+    }
     LaunchedEffect(messages.size, lastMessageShape) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+        if (messages.isNotEmpty() && followLatest && !listState.isScrollInProgress) {
+            // This is the dedicated anchor after the final message, so even a viewport-tall reply
+            // scrolls to its end instead of placing its beginning at the top.
+            listState.animateScrollToItem(messages.size)
+        }
     }
 
     Column(modifier.fillMaxWidth()) {
@@ -287,6 +304,7 @@ internal fun ChatContent(
                     items(messages, key = { it.id }) { msg ->
                         MessageView(msg = msg, onUndo = vm::rollback, onRetry = vm::retryLast)
                     }
+                    item(key = "chat-bottom-anchor") { Spacer(Modifier.height(1.dp)) }
                 }
             }
 
@@ -326,6 +344,11 @@ internal fun ChatContent(
         if (messages.isEmpty()) {
             SuggestionChips(mode = ui.mode, onPick = { vm.onInput(it) })
         }
+
+        // A live development surface belongs to the same vertical layout as the transcript. Keeping
+        // this slot above the composer makes the message list reserve its height instead of letting
+        // an absolutely-positioned preview cover whichever messages happen to be at the bottom.
+        bottomContent?.invoke(imeVisible)
 
         InputBar(
             ui = ui,

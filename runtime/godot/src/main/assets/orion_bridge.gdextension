@@ -1,0 +1,8 @@
+[configuration]
+entry_symbol = "orion_bridge_library_init"
+compatibility_minimum = "4.7"
+compatibility_maximum = "4.7"
+
+[libraries]
+android.release.arm64 = "res://bin/liborion_bridge.android.template_release.arm64.so"
+android.debug.arm64 = "res://bin/liborion_bridge.android.template_release.arm64.so"
