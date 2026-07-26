@@ -154,7 +154,12 @@ class ClaudeCodeProcess(
                 "custom scripted behavior, write a .gd file with the normal file tools (project-relative, " +
                 "under res://) then attach it with godot-reload-script <path> <script_path> — this " +
                 "snapshots and restores the node's property values across the script swap, so " +
-                "in-progress state survives. godot-delete-node removes a node. godot-set-paused " +
+                "in-progress state survives. User-supplied 3D models, textures, and audio live under " +
+                "res://assets/models, res://assets/textures, and res://assets/audio respectively — " +
+                "run e.g. `find /root/project/assets` before assuming no assets exist, and reference " +
+                "a found file by its res:// path (e.g. load(\"res://assets/models/robot.glb\")) rather " +
+                "than building placeholder-only scenes when a real asset is already available. " +
+                "godot-delete-node removes a node. godot-set-paused " +
                 "true/false + godot-step [frames] lets you advance the running game frame-by-frame " +
                 "for precise debugging. godot-simulate-input injects key/mouse/action input as if a " +
                 "player pressed it (see 'orion-tool help' for its exact argument forms). " +

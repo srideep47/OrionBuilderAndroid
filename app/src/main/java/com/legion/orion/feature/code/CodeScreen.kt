@@ -272,6 +272,9 @@ fun CodeScreen(
             ClaudeCodeOptionsSheet(
                 ui = ui,
                 onPick = { model, effort, permissionMode -> chatVm.setClaudeCodeOptions(model, effort, permissionMode) },
+                onSignIn = chatVm::beginClaudeCodeLogin,
+                onSwitchAccount = chatVm::switchClaudeCodeAccount,
+                onLogout = chatVm::logoutClaudeCode,
                 onDismiss = { claudeOptionsSheetOpen = false },
             )
         }

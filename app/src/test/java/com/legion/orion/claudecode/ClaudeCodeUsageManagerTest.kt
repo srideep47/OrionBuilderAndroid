@@ -26,4 +26,14 @@ class ClaudeCodeUsageManagerTest {
         assertEquals(0.0, usage.modelScoped.single().usedPercentage ?: -1.0, 0.001)
         assertNull(usage.modelScoped.single().resetsAtEpochSeconds)
     }
+
+    @Test
+    fun normalizesFractionalUtilizationFromUsageEndpoint() {
+        val usage = ClaudeCodeUsageManager.parseUsageResponse(
+            """{"five_hour":{"utilization":0.43},"seven_day":{"used_percentage":0.07}}""",
+        )
+
+        assertEquals(43.0, usage.fiveHour.usedPercentage ?: -1.0, 0.001)
+        assertEquals(7.0, usage.sevenDay.usedPercentage ?: -1.0, 0.001)
+    }
 }

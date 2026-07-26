@@ -182,4 +182,8 @@ interface ClaudeCodeSessionDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(session: ClaudeCodeSessionEntity)
+
+    /** A Claude session belongs to the signed-in account that created it; never resume it after an account change. */
+    @Query("DELETE FROM claude_code_sessions")
+    suspend fun clearAll()
 }

@@ -478,6 +478,15 @@ function handleMessage(remoteHex, channel, msg) {
     case 'BUILD_JOB_ACCEPTED': emit('build-accepted', { peerId: remoteHex, jobId: msg.jobId }); return;
     case 'BUILD_JOB_LOG': emit('build-log', { peerId: remoteHex, jobId: msg.jobId, line: msg.line }); return;
     case 'BUILD_JOB_RESULT': emit('build-result', { peerId: remoteHex, jobId: msg.jobId, ok: msg.ok, artifactName: msg.artifactName, artifactBase64: msg.artifactBase64, error: msg.error }); return;
+    // Asset push (phone-originated protocol addition, NOT part of the mirrored desktop schema above —
+    // there is no desktop Orion Builder counterpart yet. A trusted peer offers one file; we relay the
+    // offer to Kotlin for the user to accept/reject (see /asset/respond), then relay its chunked bytes.
+    case 'ASSET_PUSH_OFFER':
+      if (!trusted.has(remoteHex)) { channel.send({ type: 'ASSET_PUSH_REJECT', requestId: msg.requestId, reason: 'Peer is not in your trusted list' }); return; }
+      emit('asset-push-offer', { peerId: remoteHex, requestId: msg.requestId, fileName: msg.fileName, sizeBytes: msg.sizeBytes || 0 });
+      return;
+    case 'ASSET_PUSH_CHUNK': emit('asset-push-chunk', { peerId: remoteHex, requestId: msg.requestId, data: msg.data, eof: !!msg.eof }); return;
+    case 'ASSET_PUSH_ERROR': emit('asset-push-error', { peerId: remoteHex, requestId: msg.requestId, error: msg.error }); return;
     default: return;
   }
 }
@@ -594,6 +603,18 @@ const routes = {
     if (b.line !== undefined) e.channel.send({ type: 'BUILD_JOB_LOG', jobId: b.jobId, line: b.line });
     else if (b.done) e.channel.send({ type: 'BUILD_JOB_RESULT', jobId: b.jobId, ok: !!b.ok, artifactName: b.artifactName, artifactBase64: b.artifactBase64, error: b.error });
     else e.channel.send({ type: 'BUILD_JOB_ACCEPTED', jobId: b.jobId });
+    return { ok: true };
+  },
+  // User's accept/reject of an inbound ASSET_PUSH_OFFER (new protocol addition, see the case above).
+  'POST /asset/respond': async (b) => {
+    const e = connected.get(b.peerId); if (!e) return { ok: false };
+    e.channel.send(b.accept ? { type: 'ASSET_PUSH_ACCEPT', requestId: b.requestId } : { type: 'ASSET_PUSH_REJECT', requestId: b.requestId, reason: b.reason });
+    return { ok: true };
+  },
+  // Final ack once the reassembled file has been written (or failed to write) on our side.
+  'POST /asset/result': async (b) => {
+    const e = connected.get(b.peerId); if (!e) return { ok: false };
+    e.channel.send({ type: 'ASSET_PUSH_RESULT', requestId: b.requestId, ok: !!b.ok, error: b.error });
     return { ok: true };
   },
 };

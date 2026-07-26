@@ -34,8 +34,18 @@ object MsgRole {
     const val ASSISTANT = "assistant"
 }
 
+/** A file copied into the active Claude project so the CLI can safely read it inside its proot. */
 @Serializable
-private data class PartPayload(val text: String)
+data class ChatAttachment(
+    val displayName: String,
+    val localPath: String,
+    val claudePath: String,
+    val mimeType: String? = null,
+    val sizeBytes: Long = 0,
+)
+
+@Serializable
+private data class PartPayload(val text: String, val attachments: List<ChatAttachment> = emptyList())
 
 /** A tool-call card's data — name, raw args, status (running|done|error), result text, and the
  * shadow-ref commit to roll back to. Mirrors the desktop tool-call presentation. [diff], if present,
@@ -53,7 +63,12 @@ data class ToolView(
 )
 
 /** A message with its ordered parts, ready for rendering. */
-data class UiPart(val type: String, val text: String, val tool: ToolView? = null)
+data class UiPart(
+    val type: String,
+    val text: String,
+    val tool: ToolView? = null,
+    val attachments: List<ChatAttachment> = emptyList(),
+)
 data class UiMessage(
     val id: String,
     val role: String,
@@ -123,7 +138,7 @@ class ChatRepository @Inject constructor(
                     if (p.type == PartType.TOOL_CALL) {
                         UiPart(p.type, "", runCatching { json.decodeFromString<ToolView>(p.json) }.getOrNull())
                     } else {
-                        UiPart(p.type, decode(p.json))
+                        decode(p.json).let { payload -> UiPart(p.type, payload.text, attachments = payload.attachments) }
                     }
                 }
                 UiMessage(msg.id, msg.role, msg.status, parts, msg.createdAt)
@@ -131,10 +146,10 @@ class ChatRepository @Inject constructor(
         }
 
     /** Persists a completed user message (single text part) and indexes it. */
-    suspend fun addUserMessage(chatId: String, text: String): String {
+    suspend fun addUserMessage(chatId: String, text: String, attachments: List<ChatAttachment> = emptyList()): String {
         val id = UUID.randomUUID().toString()
         messageDao.upsert(MessageEntity(id, chatId, MsgRole.USER, MsgStatus.COMPLETE, clock()))
-        messageDao.upsertPart(MessagePartEntity(UUID.randomUUID().toString(), id, 0, PartType.TEXT, encode(text)))
+        messageDao.upsertPart(MessagePartEntity(UUID.randomUUID().toString(), id, 0, PartType.TEXT, encode(text, attachments)))
         ftsDao.insert(ChatFtsEntity(messageId = id, content = text))
         return id
     }
@@ -186,7 +201,7 @@ class ChatRepository @Inject constructor(
             val payload = if (part.type == PartType.TOOL_CALL && part.tool != null) {
                 json.encodeToString(ToolView.serializer(), part.tool)
             } else {
-                encode(part.text)
+                encode(part.text, part.attachments)
             }
             messageDao.upsertPart(MessagePartEntity(UUID.randomUUID().toString(), messageId, seq, part.type, payload))
         }
@@ -198,7 +213,8 @@ class ChatRepository @Inject constructor(
     /** Returns message IDs whose text matches an FTS query. */
     suspend fun search(query: String): List<String> = ftsDao.search(query)
 
-    private fun encode(text: String): String = json.encodeToString(PartPayload(text))
-    private fun decode(stored: String): String =
-        runCatching { json.decodeFromString<PartPayload>(stored).text }.getOrDefault(stored)
+    private fun encode(text: String, attachments: List<ChatAttachment> = emptyList()): String =
+        json.encodeToString(PartPayload(text, attachments))
+    private fun decode(stored: String): PartPayload =
+        runCatching { json.decodeFromString<PartPayload>(stored) }.getOrElse { PartPayload(stored) }
 }

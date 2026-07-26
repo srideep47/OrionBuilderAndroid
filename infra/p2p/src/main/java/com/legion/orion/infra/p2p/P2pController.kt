@@ -78,6 +78,10 @@ class P2pController @Inject constructor(
     private val _buildEvents = MutableSharedFlow<P2pEvent>(extraBufferCapacity = 64)
     val buildEvents: SharedFlow<P2pEvent> = _buildEvents.asSharedFlow()
 
+    /** Inbound asset-push offers/chunks/errors from a peer pushing a file into a project. */
+    private val _assetEvents = MutableSharedFlow<P2pEvent>(extraBufferCapacity = 64)
+    val assetEvents: SharedFlow<P2pEvent> = _assetEvents.asSharedFlow()
+
     private var eventJob: Job? = null
 
     @Volatile private var started = false
@@ -179,6 +183,12 @@ class P2pController @Inject constructor(
 
     suspend fun cancelBuildJob(peerId: String, jobId: String) = bridge.cancelBuildJob(peerId, jobId)
 
+    suspend fun respondAssetPush(peerId: String, requestId: String, accept: Boolean, reason: String? = null) =
+        bridge.respondAssetPush(peerId, requestId, accept, reason)
+
+    suspend fun sendAssetPushResult(peerId: String, requestId: String, ok: Boolean, error: String? = null) =
+        bridge.sendAssetPushResult(peerId, requestId, ok, error)
+
     private fun startEventCollection() {
         eventJob?.cancel()
         eventJob = scope.launch {
@@ -213,6 +223,8 @@ class P2pController @Inject constructor(
                 _mediaEvents.emit(event)
             is P2pEvent.BuildAccepted, is P2pEvent.BuildLog, is P2pEvent.BuildResult ->
                 _buildEvents.emit(event)
+            is P2pEvent.AssetPushOffer, is P2pEvent.AssetPushChunk, is P2pEvent.AssetPushError ->
+                _assetEvents.emit(event)
             is P2pEvent.Unknown -> Unit
         }
     }

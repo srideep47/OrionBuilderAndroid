@@ -124,7 +124,13 @@ class StreamJsonEventMapper {
                         partIndexByBlockIndex[index] = parts.lastIndex
                     }
                     "thinking" -> {
-                        parts.add(UiPart(PartType.THINKING, ""))
+                        // Recent Claude models may include an initial fragment on the start event
+                        // before the subsequent thinking_delta events arrive.
+                        parts.add(UiPart(PartType.THINKING, block.stringOrNull("thinking").orEmpty()))
+                        partIndexByBlockIndex[index] = parts.lastIndex
+                    }
+                    "redacted_thinking" -> {
+                        parts.add(UiPart(PartType.THINKING, "Claude returned protected reasoning for this step."))
                         partIndexByBlockIndex[index] = parts.lastIndex
                     }
                     "tool_use" -> {
@@ -143,7 +149,10 @@ class StreamJsonEventMapper {
                 val partIndex = partIndexByBlockIndex[index] ?: return
                 when (delta.stringOrNull("type")) {
                     "text_delta" -> appendText(partIndex, delta.stringOrNull("text").orEmpty())
-                    "thinking_delta" -> appendText(partIndex, delta.stringOrNull("thinking").orEmpty())
+                    "thinking_delta" -> appendText(
+                        partIndex,
+                        delta.stringOrNull("thinking") ?: delta.stringOrNull("text").orEmpty(),
+                    )
                     "input_json_delta" -> argsBuilderByBlockIndex[index]?.append(delta.stringOrNull("partial_json").orEmpty())
                     // signature_delta (thinking-block crypto signature): not user-visible, ignored.
                 }

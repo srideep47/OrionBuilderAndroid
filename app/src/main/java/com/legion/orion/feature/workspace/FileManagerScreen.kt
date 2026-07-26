@@ -1,5 +1,7 @@
 package com.legion.orion.feature.workspace
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -46,6 +48,7 @@ import androidx.compose.material.icons.outlined.SelectAll
 import androidx.compose.material.icons.outlined.Sort
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.Unarchive
+import androidx.compose.material.icons.outlined.UploadFile
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Checkbox
@@ -123,6 +126,10 @@ fun FileManagerScreen(
     var projectMenuTarget by remember { mutableStateOf<ProjectEntity?>(null) }
     var projectRenameTarget by remember { mutableStateOf<ProjectEntity?>(null) }
     var projectDeleteTarget by remember { mutableStateOf<ProjectEntity?>(null) }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) vm.importFiles(uris)
+    }
 
     LaunchedEffect(ui.query) {
         if (ui.query.trim().length >= 2) {
@@ -267,6 +274,7 @@ fun FileManagerScreen(
             } else {
                 LiquidButton("Folder", onClick = { newFolderDialog = true }, compact = true, icon = Icons.Outlined.CreateNewFolder)
                 LiquidButton("File", onClick = { newFileDialog = true }, compact = true, icon = Icons.Outlined.NoteAdd)
+                LiquidButton("Import", onClick = { importLauncher.launch(arrayOf("*/*")) }, compact = true, icon = Icons.Outlined.UploadFile)
                 if (onOpenTerminalHere != null) {
                     LiquidButton("Terminal here", onClick = { onOpenTerminalHere(vm.currentRelativePath()) }, compact = true, icon = Icons.Outlined.Terminal)
                 }

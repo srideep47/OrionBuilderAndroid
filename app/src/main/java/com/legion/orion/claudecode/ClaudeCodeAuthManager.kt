@@ -56,6 +56,27 @@ class ClaudeCodeAuthManager(private val toolchain: ClaudeCodeToolchain) {
         parseStatus(output)
     }
 
+    /**
+     * Signs out through Claude Code itself.  This is deliberately not implemented by deleting
+     * `~/.claude/.credentials.json`: the CLI owns that file and may change its credential layout.
+     */
+    suspend fun logout() = withContext(Dispatchers.IO) {
+        val proc = ProcessBuilder(baseCommand("$envPrefix claude auth logout 2>&1"))
+            .redirectErrorStream(true)
+            .withProotEnv()
+            .start()
+        val output = proc.inputStream.bufferedReader().readText()
+        if (!proc.waitFor(30, TimeUnit.SECONDS)) {
+            proc.destroy()
+            error("Claude Code sign-out timed out")
+        }
+        check(proc.exitValue() == 0) {
+            output.lineSequence().lastOrNull()?.take(240) ?: "Claude Code sign-out failed"
+        }
+        val status = status()
+        check(!status.loggedIn) { "Claude Code still reports an active account after sign-out" }
+    }
+
     private fun parseStatus(output: String): AuthStatus = AuthStatus(
         loggedIn = Regex("\"loggedIn\"\\s*:\\s*true").containsMatchIn(output),
         email = Regex("\"email\"\\s*:\\s*\"([^\"]+)\"").find(output)?.groupValues?.get(1),

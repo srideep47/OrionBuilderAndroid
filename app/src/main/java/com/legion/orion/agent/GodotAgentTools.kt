@@ -85,7 +85,10 @@ private class GodotLaunchTool(private val process: GodotProcessController) : Age
     override val description =
         "Start the embedded Godot engine for the active Orion project and show its chat panel. " +
             "If needed, installs a starter Godot scene and Orion's control bridge without replacing " +
-            "existing project files. Required before any other godot_* tool " +
+            "existing project files, including empty res://assets/models, res://assets/textures, and " +
+            "res://assets/audio folders — check those (with list_files) for user-supplied 3D models, " +
+            "textures, and audio before building placeholder-only scenes, and reference a found file " +
+            "by its res:// path. Required before any other godot_* tool " +
             "will work. Real process boot — takes a moment; check godot_status to confirm it's ready."
     override val parameters = objectSchema()
     override val mutating = true

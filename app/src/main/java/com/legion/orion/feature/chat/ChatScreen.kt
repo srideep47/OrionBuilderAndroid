@@ -2,6 +2,8 @@ package com.legion.orion.feature.chat
 
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -45,6 +47,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
@@ -56,15 +59,18 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -79,6 +85,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
@@ -93,6 +100,7 @@ import com.legion.orion.core.database.ProviderEntity
 import com.legion.orion.core.design.Cosmos
 import com.legion.orion.core.design.Liquid
 import com.legion.orion.core.design.LiquidButton
+import com.legion.orion.core.design.LiquidButtonStyle
 import com.legion.orion.core.design.LiquidChip
 import com.legion.orion.core.design.LiquidIconButton
 import com.legion.orion.core.design.LiquidProgress
@@ -103,6 +111,7 @@ import com.legion.orion.core.design.MonoFamily
 import com.legion.orion.core.design.liquidGlass
 import com.legion.orion.core.design.rememberHaptic
 import com.legion.orion.data.chat.MsgRole
+import com.legion.orion.data.chat.ChatAttachment
 import com.legion.orion.data.chat.MsgStatus
 import com.legion.orion.data.chat.PartType
 import com.legion.orion.data.chat.ToolView
@@ -111,6 +120,8 @@ import com.legion.orion.data.providers.ProviderType
 import com.legion.orion.feature.editor.EditorScreen
 import com.legion.orion.feature.preview.PreviewScreen
 import com.legion.orion.inference.EngineState
+import coil.compose.AsyncImage
+import java.io.File
 
 // The conversation surface, header, model/history/options sheets, and message rendering below are
 // the reusable building blocks of the unified Code space (see feature/code/CodeScreen.kt) — the old
@@ -263,6 +274,9 @@ internal fun ChatContent(
     // reserved for it becomes dead space between the input bar and the keyboard — only reserve it
     // when the IME is actually hidden. WindowInsets.ime updates live as the keyboard animates in/out.
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val attachmentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        vm.addClaudeCodeAttachments(uris)
+    }
 
     // Keys on parts.size + each tool's status (not just text length) — otherwise adding/updating a
     // tool-call card (Claude Code executing Read/Write/Bash, etc.) never triggers a re-scroll, since a
@@ -353,6 +367,8 @@ internal fun ChatContent(
         InputBar(
             ui = ui,
             onInput = vm::onInput,
+            onAttach = { attachmentPicker.launch(arrayOf("*/*")) },
+            onRemoveAttachment = vm::removeClaudeCodeAttachment,
             onSend = vm::send,
             onStop = vm::stop,
             onToggleMode = {
@@ -761,6 +777,8 @@ private fun SuggestionChips(mode: ChatMode, onPick: (String) -> Unit) {
 private fun InputBar(
     ui: ChatUiState,
     onInput: (String) -> Unit,
+    onAttach: () -> Unit,
+    onRemoveAttachment: (ChatAttachment) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onToggleMode: () -> Unit,
@@ -821,6 +839,19 @@ private fun InputBar(
             )
         }
 
+        if (ui.mode == ChatMode.CLAUDE_CODE) {
+            Icon(
+                Icons.Outlined.AttachFile,
+                contentDescription = "Attach files for Claude Code",
+                tint = Cosmos.TextMuted,
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .clickable(enabled = !ui.busy) { haptic(); onAttach() }
+                    .padding(6.dp),
+            )
+        }
+
         BasicTextField(
             value = ui.input,
             onValueChange = onInput,
@@ -844,7 +875,7 @@ private fun InputBar(
             },
         )
 
-        val canSend = ui.input.isNotBlank() && !ui.busy
+        val canSend = (ui.input.isNotBlank() || ui.attachments.isNotEmpty()) && !ui.busy
         Box(
             Modifier
                 .size(38.dp)
@@ -898,11 +929,12 @@ private fun MessageView(msg: UiMessage, onUndo: (ToolView) -> Unit, onRetry: () 
                     )
                     .padding(horizontal = 14.dp, vertical = 10.dp),
             ) {
-                Text(
-                    msg.parts.joinToString("\n") { it.text },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Cosmos.Text,
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    msg.parts.joinToString("\n") { it.text }.takeIf { it.isNotBlank() }?.let {
+                        Text(it, style = MaterialTheme.typography.bodyMedium, color = Cosmos.Text)
+                    }
+                    msg.parts.flatMap { it.attachments }.forEach { attachment -> AttachmentPreview(attachment) }
+                }
             }
         }
         return
@@ -916,10 +948,9 @@ private fun MessageView(msg: UiMessage, onUndo: (ToolView) -> Unit, onRetry: () 
         }
         msg.parts.forEach { part ->
             when (part.type) {
-                PartType.THINKING -> ThinkingBlock(
-                    text = part.text,
-                    streaming = msg.status == MsgStatus.STREAMING,
-                )
+                PartType.THINKING -> if (part.text.isNotBlank() || msg.status == MsgStatus.STREAMING) {
+                    ThinkingBlock(text = part.text, streaming = msg.status == MsgStatus.STREAMING)
+                }
                 PartType.TOOL_CALL -> part.tool?.let { ToolCard(it, onUndo) }
                 else -> MarkdownText(part.text)
             }
@@ -943,6 +974,34 @@ private fun MessageView(msg: UiMessage, onUndo: (ToolView) -> Unit, onRetry: () 
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun AttachmentPreview(attachment: ChatAttachment) {
+    val image = attachment.mimeType?.startsWith("image/") == true
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0x22000000))
+            .padding(8.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+    ) {
+        if (image) {
+            AsyncImage(
+                model = File(attachment.localPath),
+                contentDescription = attachment.displayName,
+                modifier = Modifier.fillMaxWidth().height(180.dp).clip(RoundedCornerShape(7.dp)),
+                contentScale = ContentScale.Crop,
+            )
+        }
+        Text(attachment.displayName, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextDim)
+        Text(
+            attachment.mimeType ?: "File",
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+            color = Cosmos.TextMuted,
+        )
     }
 }
 
@@ -1281,10 +1340,14 @@ internal fun HistorySheet(
 internal fun ClaudeCodeOptionsSheet(
     ui: ChatUiState,
     onPick: (model: String?, effort: String, permissionMode: String) -> Unit,
+    onSignIn: () -> Unit,
+    onSwitchAccount: () -> Unit,
+    onLogout: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val cc = ui.claudeCode
+    var confirmAction by remember { mutableStateOf<ClaudeAccountAction?>(null) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1298,6 +1361,68 @@ internal fun ClaudeCodeOptionsSheet(
                 style = MaterialTheme.typography.titleMedium.copy(brush = Cosmos.TitleGradient),
                 fontWeight = FontWeight.Bold,
             )
+
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .liquidGlass(shape = Liquid.ShapeSmall, fillTopAlpha = 0.08f)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                Text("Account", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                if (cc.loggedIn) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Icon(Icons.Outlined.Person, null, tint = Cosmos.Violet3, modifier = Modifier.size(18.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                cc.email ?: "Claude subscription",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Cosmos.Text,
+                            )
+                            Text(
+                                cc.subscriptionType?.replaceFirstChar(Char::uppercase) ?: "Signed in",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Cosmos.TextMuted,
+                            )
+                        }
+                        if (cc.accountActionBusy) {
+                            CircularProgressIndicator(Modifier.size(17.dp), strokeWidth = 1.5.dp, color = Cosmos.Violet)
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        LiquidButton(
+                            "Switch account",
+                            compact = true,
+                            style = LiquidButtonStyle.Glass,
+                            enabled = !cc.accountActionBusy && !cc.loginBusy,
+                            onClick = { confirmAction = ClaudeAccountAction.SWITCH },
+                        )
+                        LiquidButton(
+                            "Log out",
+                            compact = true,
+                            style = LiquidButtonStyle.Destructive,
+                            enabled = !cc.accountActionBusy && !cc.loginBusy,
+                            onClick = { confirmAction = ClaudeAccountAction.LOGOUT },
+                        )
+                    }
+                } else {
+                    Text(
+                        if (cc.installed) "No Claude account is signed in on this device."
+                        else "Install the Claude Code runtime to sign in on this device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Cosmos.TextMuted,
+                    )
+                    LiquidButton(
+                        if (cc.loginBusy) "Starting sign-in…" else "Sign in",
+                        compact = true,
+                        enabled = cc.installed && !cc.loginBusy && !cc.accountActionBusy,
+                        onClick = onSignIn,
+                    )
+                }
+                cc.accountActionError?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = Cosmos.Red)
+                }
+            }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Model", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
@@ -1366,7 +1491,35 @@ internal fun ClaudeCodeOptionsSheet(
             Spacer(Modifier.height(10.dp))
         }
     }
+
+    confirmAction?.let { action ->
+        val switching = action == ClaudeAccountAction.SWITCH
+        AlertDialog(
+            onDismissRequest = { confirmAction = null },
+            title = { Text(if (switching) "Switch Claude account?" else "Log out of Claude Code?") },
+            text = {
+                Text(
+                    if (switching) {
+                        "Claude Code will stop active work, sign out of ${cc.email ?: "the current account"}, and open the sign-in flow for another account."
+                    } else {
+                        "Claude Code will stop active work and remove this account from Orion. You can sign in again at any time."
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmAction = null
+                    if (switching) onSwitchAccount() else onLogout()
+                }) {
+                    Text(if (switching) "Switch account" else "Log out", color = Cosmos.Red)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmAction = null }) { Text("Cancel") } },
+        )
+    }
 }
+
+private enum class ClaudeAccountAction { SWITCH, LOGOUT }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

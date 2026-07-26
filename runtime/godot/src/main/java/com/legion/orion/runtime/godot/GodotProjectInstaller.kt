@@ -16,6 +16,7 @@ object GodotProjectInstaller {
         if (!File(projectDir, "project.godot").isFile) {
             copyAsset(context, "project.godot", File(projectDir, "project.godot"))
             copyAsset(context, "Main.tscn", File(projectDir, "Main.tscn"))
+            seedAssetFolders(projectDir)
         }
 
         copyAsset(context, "orion_bridge.gdextension", File(projectDir, "orion_bridge.gdextension"))
@@ -27,6 +28,17 @@ object GodotProjectInstaller {
         copyAsset(context, ".godot/extension_list.cfg", File(projectDir, ".godot/extension_list.cfg"))
         File(projectDir, ".orion").mkdirs()
         return projectDir
+    }
+
+    /** Seeds the `res://assets/{models,textures,audio}` convention on first install only, so both
+     * AI backends have a predictable place to look for user-supplied assets and the user has an
+     * obvious place to navigate into before importing one. A `.gdkeep` placeholder keeps each folder
+     * present if the project later becomes a git repo (git does not track empty directories). */
+    private fun seedAssetFolders(projectDir: File) {
+        listOf("models", "textures", "audio").forEach { category ->
+            val dir = File(projectDir, "assets/$category").apply { mkdirs() }
+            File(dir, ".gdkeep").createNewFile()
+        }
     }
 
     private fun copyAsset(context: Context, assetPath: String, destination: File) {

@@ -25,7 +25,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.legion.orion.core.database.ProjectEntity
 import com.legion.orion.core.design.BadgeTone
 import com.legion.orion.core.design.Cosmos
 import com.legion.orion.core.design.CosmosBadge
@@ -43,6 +46,7 @@ import com.legion.orion.core.design.LocalBottomChromeHeight
 import com.legion.orion.core.design.MonoFamily
 import com.legion.orion.infra.p2p.FriendRequest
 import com.legion.orion.infra.p2p.P2pPeer
+import com.legion.orion.p2p.AssetOffer
 
 /** Peers pane — P2P discovery, identity, and the friends/trust flow. */
 @Composable
@@ -54,6 +58,9 @@ fun NetworkScreen(viewModel: NetworkViewModel = hiltViewModel()) {
     val trusted by viewModel.trusted.collectAsStateWithLifecycle()
     val pending by viewModel.pendingRequests.collectAsStateWithLifecycle()
     val mode by viewModel.mode.collectAsStateWithLifecycle()
+    val assetOffers by viewModel.assetOffers.collectAsStateWithLifecycle()
+    val projects by viewModel.projects.collectAsStateWithLifecycle()
+    val activeProjectId by viewModel.activeProjectId.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(Unit) {
@@ -87,6 +94,19 @@ fun NetworkScreen(viewModel: NetworkViewModel = hiltViewModel()) {
                         req,
                         onAccept = { viewModel.acceptFriend(req) },
                         onDismiss = { viewModel.dismissRequest(req) },
+                    )
+                }
+            }
+
+            if (assetOffers.isNotEmpty()) {
+                item { SectionLabel("Incoming files") }
+                items(assetOffers, key = { it.requestId }) { offer ->
+                    AssetOfferCard(
+                        offer = offer,
+                        projects = projects,
+                        defaultProjectId = activeProjectId,
+                        onAccept = { projectId -> viewModel.acceptAsset(offer, projectId) },
+                        onReject = { viewModel.rejectAsset(offer) },
                     )
                 }
             }
@@ -201,6 +221,72 @@ private fun FriendRequestCard(req: FriendRequest, onAccept: () -> Unit, onDismis
             }
         }
     }
+}
+
+@Composable
+private fun AssetOfferCard(
+    offer: AssetOffer,
+    projects: List<ProjectEntity>,
+    defaultProjectId: String?,
+    onAccept: (String) -> Unit,
+    onReject: () -> Unit,
+) {
+    var selected by remember(offer.requestId, projects) {
+        mutableStateOf(projects.firstOrNull { it.id == defaultProjectId } ?: projects.firstOrNull())
+    }
+    LiquidPanel(modifier = Modifier.fillMaxWidth(), tint = Cosmos.Violet) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(offer.fileName, style = MaterialTheme.typography.titleSmall, color = Cosmos.Text)
+            Text(
+                "${formatBytes(offer.sizeBytes)} · from a paired peer",
+                style = MaterialTheme.typography.bodySmall,
+                color = Cosmos.TextMuted,
+            )
+            if (projects.isEmpty()) {
+                Text(
+                    "Create a project first to receive this file.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Cosmos.Amber,
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Send to:", style = MaterialTheme.typography.bodySmall, color = Cosmos.TextMuted)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        selected?.name ?: "—",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Cosmos.Violet3,
+                        modifier = Modifier.weight(1f),
+                    )
+                    LiquidButton(
+                        "Change",
+                        onClick = {
+                            val index = projects.indexOf(selected)
+                            selected = projects[(index + 1).mod(projects.size)]
+                        },
+                        style = LiquidButtonStyle.Glass,
+                        compact = true,
+                    )
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Spacer(Modifier.weight(1f))
+                LiquidButton("Reject", onClick = onReject, style = LiquidButtonStyle.Glass, compact = true)
+                LiquidButton(
+                    "Accept",
+                    onClick = { selected?.let { onAccept(it.id) } },
+                    compact = true,
+                )
+            }
+        }
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val units = arrayOf("B", "KB", "MB", "GB")
+    val exp = (kotlin.math.ln(bytes.toDouble()) / kotlin.math.ln(1024.0)).toInt().coerceIn(0, units.lastIndex)
+    return "%.1f %s".format(bytes / Math.pow(1024.0, exp.toDouble()), units[exp])
 }
 
 @Composable

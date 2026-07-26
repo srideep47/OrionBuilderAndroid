@@ -1,6 +1,7 @@
 package com.legion.orion.feature.chat
 
 import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.legion.orion.agent.AppAgentTools
@@ -20,6 +21,7 @@ import com.legion.orion.core.database.ClaudeCodeSessionEntity
 import com.legion.orion.core.database.ProviderEntity
 import com.legion.orion.core.datastore.SettingsRepository
 import com.legion.orion.data.chat.ChatRepository
+import com.legion.orion.data.chat.ChatAttachment
 import com.legion.orion.data.chat.MsgRole
 import com.legion.orion.data.chat.MsgStatus
 import com.legion.orion.data.chat.PartType
@@ -50,6 +52,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
@@ -94,6 +97,8 @@ data class ChatUiState(
     val selectedProvider: ProviderEntity? = null,
     val selectedModel: String = "",
     val input: String = "",
+    /** Files selected for the next Claude Code turn, copied into the current project sandbox. */
+    val attachments: List<ChatAttachment> = emptyList(),
     val busy: Boolean = false,
     val error: String? = null,
     val notice: String? = null,
@@ -121,6 +126,9 @@ data class ClaudeCodeUiState(
     val loginUrl: String? = null,
     val loginBusy: Boolean = false,
     val loginError: String? = null,
+    /** True while a logout or account switch is safely closing running Claude work. */
+    val accountActionBusy: Boolean = false,
+    val accountActionError: String? = null,
     /** null = no `--model` flag, Claude Code uses the account's own default. */
     val model: String? = null,
     val effort: String = "medium",
@@ -201,6 +209,7 @@ class ChatViewModel @Inject constructor(
     private var claudeCodeLoginSession: ClaudeCodeAuthManager.LoginSession? = null
     private val claudeUsageRefreshMutex = Mutex()
     private var lastClaudeUsageRefreshAt = 0L
+    private var lastClaudeUsageFailureAt = 0L
 
     val chats: StateFlow<List<ChatEntity>> = chatRepo.observeChats()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -311,6 +320,49 @@ class ChatViewModel @Inject constructor(
 
     fun onInput(text: String) { _ui.value = _ui.value.copy(input = text) }
 
+    /** Copies selected documents into the project before Claude sees them; source URIs are never retained. */
+    fun addClaudeCodeAttachments(uris: List<Uri>) {
+        if (uris.isEmpty() || _ui.value.mode != ChatMode.CLAUDE_CODE) return
+        viewModelScope.launch {
+            runCatching {
+                val pid = projectId ?: projectResolutionMutex.withLock {
+                    projectId ?: projects.createBlankProject("New Project").id.also { projectId = it }
+                }
+                activeProject.set(pid)
+                val projectDir = projects.dirFor(pid)
+                val attachmentDir = File(projectDir, ".orion/attachments").apply { mkdirs() }
+                uris.map { uri ->
+                    val displayName = uri.lastPathSegment
+                        ?.substringAfterLast('/')
+                        ?.replace(Regex("[^A-Za-z0-9._ -]"), "_")
+                        ?.take(96)
+                        ?.ifBlank { "attachment" }
+                        ?: "attachment"
+                    val storedName = "${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(8)}_$displayName"
+                    val target = File(attachmentDir, storedName)
+                    appContext.contentResolver.openInputStream(uri)?.use { input ->
+                        target.outputStream().use { input.copyTo(it) }
+                    } ?: error("Couldn't read $displayName")
+                    ChatAttachment(
+                        displayName = displayName,
+                        localPath = target.absolutePath,
+                        claudePath = "/root/project/.orion/attachments/$storedName",
+                        mimeType = appContext.contentResolver.getType(uri),
+                        sizeBytes = target.length(),
+                    )
+                }
+            }.onSuccess { added ->
+                _ui.value = _ui.value.copy(attachments = _ui.value.attachments + added, error = null)
+            }.onFailure { error ->
+                _ui.value = _ui.value.copy(error = "Couldn't attach file: ${error.message ?: "Unknown error"}")
+            }
+        }
+    }
+
+    fun removeClaudeCodeAttachment(attachment: ChatAttachment) {
+        _ui.value = _ui.value.copy(attachments = _ui.value.attachments - attachment)
+    }
+
     fun respondToClaudePermission(id: String, decision: ClaudePermissionDecision) {
         claudeToolBridge.respondToPermission(id, decision)
     }
@@ -366,6 +418,10 @@ class ChatViewModel @Inject constructor(
         claudeUsageRefreshMutex.withLock {
             val now = System.currentTimeMillis()
             if (!force && now - lastClaudeUsageRefreshAt < 55_000) return
+            // The subscription usage endpoint throttles quickly. Do not turn an unavailable
+            // quota read into a persistent background retry loop; the refresh button can still
+            // make an explicit retry when the user chooses.
+            if (!force && now - lastClaudeUsageFailureAt < 5 * 60_000) return
             val current = _ui.value.claudeCode
             _ui.value = _ui.value.copy(
                 claudeCode = current.copy(accountUsageRefreshing = true, accountUsageError = null),
@@ -387,6 +443,7 @@ class ChatViewModel @Inject constructor(
                     )
                 }
                 .onFailure { failure ->
+                    lastClaudeUsageFailureAt = System.currentTimeMillis()
                     _ui.value = _ui.value.copy(
                         claudeCode = _ui.value.claudeCode.copy(
                             accountUsageRefreshing = false,
@@ -439,16 +496,90 @@ class ChatViewModel @Inject constructor(
     /** Starts `claude auth login --claudeai`; the resulting URL is surfaced in `ui.claudeCode.loginUrl`
      * for the caller to open in a browser. The actual sign-in happens in the user's own browser. */
     fun beginClaudeCodeLogin() {
+        if (_ui.value.claudeCode.accountActionBusy) return
         viewModelScope.launch {
-            _ui.value = _ui.value.copy(claudeCode = _ui.value.claudeCode.copy(loginBusy = true, loginError = null, loginUrl = null))
+            startClaudeCodeLogin()
+        }
+    }
+
+    /** Starts the CLI OAuth flow. Kept shared so account switching lands directly at sign-in. */
+    private suspend fun startClaudeCodeLogin() {
+        _ui.value = _ui.value.copy(
+            claudeCode = _ui.value.claudeCode.copy(loginBusy = true, loginError = null, loginUrl = null),
+        )
+        runCatching {
+            claudeCodeAuth.beginLogin { url ->
+                _ui.value = _ui.value.copy(claudeCode = _ui.value.claudeCode.copy(loginUrl = url))
+            }
+        }.onSuccess { session ->
+            claudeCodeLoginSession = session
+        }.onFailure {
+            _ui.value = _ui.value.copy(
+                claudeCode = _ui.value.claudeCode.copy(
+                    loginBusy = false,
+                    loginError = "Couldn't start sign-in: ${it.message}",
+                ),
+            )
+        }
+    }
+
+    /** Logs out of the current Claude account and clears account-bound live/resume state. */
+    fun logoutClaudeCode() = changeClaudeCodeAccount(startLoginAfterLogout = false)
+
+    /** Ends the current account session, then immediately opens Claude Code's OAuth flow for another account. */
+    fun switchClaudeCodeAccount() = changeClaudeCodeAccount(startLoginAfterLogout = true)
+
+    private fun changeClaudeCodeAccount(startLoginAfterLogout: Boolean) {
+        if (_ui.value.claudeCode.accountActionBusy || _ui.value.claudeCode.loginBusy) return
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(
+                claudeCode = _ui.value.claudeCode.copy(accountActionBusy = true, accountActionError = null),
+            )
             runCatching {
-                claudeCodeAuth.beginLogin { url ->
-                    _ui.value = _ui.value.copy(claudeCode = _ui.value.claudeCode.copy(loginUrl = url))
-                }
-            }.onSuccess { session ->
-                claudeCodeLoginSession = session
-            }.onFailure {
-                _ui.value = _ui.value.copy(claudeCode = _ui.value.claudeCode.copy(loginBusy = false, loginError = "Couldn't start sign-in: ${it.message}"))
+                // A running process has the old account's token in memory. Stop and await its job
+                // before invoking `claude auth logout`, then discard every persisted --resume id.
+                streamJob?.cancelAndJoin()
+                streamJob = null
+                claudeCodeProcesses.values.forEach { it.stop() }
+                claudeCodeProcesses.clear()
+                claudeCodeOptionsDirty = false
+                claudeCodeSessionDao.clearAll()
+                claudeCodeAuth.logout()
+            }.onSuccess {
+                val current = _ui.value.claudeCode
+                _ui.value = _ui.value.copy(
+                    claudeCode = current.copy(
+                        loggedIn = false,
+                        email = null,
+                        subscriptionType = null,
+                        accountActionBusy = false,
+                        accountActionError = null,
+                        sessionCostUsd = 0.0,
+                        lastTurnInputTokens = 0,
+                        lastTurnOutputTokens = 0,
+                        lastTurnCacheReadTokens = 0,
+                        lastTurnCacheCreationTokens = 0,
+                        contextUsedTokens = 0,
+                        contextWindowTokens = 0,
+                        contextUsedPercentage = null,
+                        contextRemainingPercentage = null,
+                        fiveHourUsedPercentage = null,
+                        fiveHourResetsAt = null,
+                        sevenDayUsedPercentage = null,
+                        sevenDayResetsAt = null,
+                        accountUsageError = null,
+                    ),
+                )
+                lastClaudeUsageRefreshAt = 0L
+                if (startLoginAfterLogout) startClaudeCodeLogin()
+            }.onFailure { error ->
+                _ui.value = _ui.value.copy(
+                    claudeCode = _ui.value.claudeCode.copy(
+                        accountActionBusy = false,
+                        accountActionError = "Couldn't sign out: ${error.message ?: "Unknown error"}",
+                    ),
+                )
+                checkClaudeCodeReadiness()
             }
         }
     }
@@ -495,19 +626,20 @@ class ChatViewModel @Inject constructor(
     fun send() {
         val state = _ui.value
         val text = state.input.trim()
-        if (text.isEmpty() || state.busy) return
+        if ((text.isEmpty() && state.attachments.isEmpty()) || state.busy) return
 
         if (state.mode == ChatMode.CLAUDE_CODE) {
             viewModelScope.launch {
-                _ui.value = state.copy(input = "", busy = true, error = null, notice = null)
+                _ui.value = state.copy(input = "", attachments = emptyList(), busy = true, error = null, notice = null)
                 val chatId = chatIdFlow.value ?: chatRepo.createChat(PLACEHOLDER_TITLE, "claude_code")
                     .also {
                         chatIdFlow.value = it.id
                         _ui.value = _ui.value.copy(activeChatId = it.id)
                     }.id
-                chatRepo.addUserMessage(chatId, text)
-                conversation.add(ChatMessage(ChatMessage.Role.USER, text))
-                runClaudeCode(chatId, text)
+                chatRepo.addUserMessage(chatId, text, state.attachments)
+                val prompt = claudePromptWithAttachments(text, state.attachments)
+                conversation.add(ChatMessage(ChatMessage.Role.USER, prompt))
+                runClaudeCode(chatId, prompt)
             }
             return
         }
@@ -535,6 +667,19 @@ class ChatViewModel @Inject constructor(
             refreshContextUsage(provider)
             if (state.mode == ChatMode.BUILD) runAgent(chatId, provider, resolved)
             else runChat(chatId, provider, resolved)
+        }
+    }
+
+    private fun claudePromptWithAttachments(text: String, attachments: List<ChatAttachment>): String {
+        if (attachments.isEmpty()) return text
+        return buildString {
+            append(text.ifBlank { "Please inspect the attached file(s)." })
+            append("\n\nAttached files are available inside the project sandbox. Read/analyze them directly:")
+            attachments.forEach { attachment ->
+                append("\n- ").append(attachment.displayName)
+                    .append(" (").append(attachment.mimeType ?: "file").append("): ")
+                    .append(attachment.claudePath)
+            }
         }
     }
 
@@ -875,7 +1020,7 @@ class ChatViewModel @Inject constructor(
             streamingFlow.value = null
             _ui.value = _ui.value.copy(busy = false, error = errorMsg)
             if (status == MsgStatus.COMPLETE) withContext(NonCancellable) { maybeNameClaudeCodeChatAndProject(chatId, pid, isFreshProject, userText) }
-            refreshClaudeAccountUsageInternal(force = true)
+            refreshClaudeAccountUsageInternal(force = false)
             if (claudeCodeOptionsDirty) {
                 claudeCodeOptionsDirty = false
                 claudeCodeProcesses.values.forEach { it.stop() }

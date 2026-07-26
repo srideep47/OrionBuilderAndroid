@@ -4,20 +4,30 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.legion.orion.core.database.ProjectEntity
+import com.legion.orion.data.project.ActiveProjectStore
+import com.legion.orion.data.project.ProjectManager
 import com.legion.orion.infra.p2p.FriendRequest
+import com.legion.orion.p2p.AssetOffer
+import com.legion.orion.p2p.AssetTransferManager
 import com.legion.orion.p2p.P2pCoordinator
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 @HiltViewModel
 class NetworkViewModel @Inject constructor(
     application: Application,
     private val coordinator: P2pCoordinator,
+    private val assetTransfer: AssetTransferManager,
+    private val projectManager: ProjectManager,
+    private val activeProject: ActiveProjectStore,
 ) : AndroidViewModel(application) {
 
     val peers = coordinator.peers
@@ -28,6 +38,11 @@ class NetworkViewModel @Inject constructor(
 
     private val _pendingRequests = MutableStateFlow<List<FriendRequest>>(emptyList())
     val pendingRequests = _pendingRequests.asStateFlow()
+
+    val assetOffers = assetTransfer.pendingOffers
+    val projects: kotlinx.coroutines.flow.StateFlow<List<ProjectEntity>> = projectManager.observeProjects()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val activeProjectId = activeProject.projectId
 
     private val _busy = MutableStateFlow(false)
     val busy = _busy.asStateFlow()
@@ -43,6 +58,17 @@ class NetworkViewModel @Inject constructor(
                     _pendingRequests.value.filterNot { it.fromPublicKey == req.fromPublicKey } + req
             }
         }
+        viewModelScope.launch {
+            assetTransfer.notices.collect { _errors.emit(it) }
+        }
+    }
+
+    fun acceptAsset(offer: AssetOffer, targetProjectId: String) {
+        viewModelScope.launch { assetTransfer.accept(offer.requestId, targetProjectId) }
+    }
+
+    fun rejectAsset(offer: AssetOffer) {
+        viewModelScope.launch { assetTransfer.reject(offer.requestId) }
     }
 
     fun toggleOnline(enable: Boolean) {

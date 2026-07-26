@@ -105,7 +105,7 @@ class ClaudeCodeUsageManager(private val toolchain: ClaudeCodeToolchain) {
                         add(
                             ClaudeModelQuota(
                                 displayName = name,
-                                usedPercentage = item.number("percent"),
+                                usedPercentage = percent(item.number("percent")),
                                 resetsAtEpochSeconds = item.epochSeconds("resets_at"),
                             ),
                         )
@@ -128,12 +128,12 @@ class ClaudeCodeUsageManager(private val toolchain: ClaudeCodeToolchain) {
         }
 
         private fun JsonObject.toWindow() = ClaudeQuotaWindow(
-            usedPercentage = number("utilization") ?: number("used_percentage"),
+            usedPercentage = percent(number("utilization") ?: number("used_percentage")),
             resetsAtEpochSeconds = epochSeconds("resets_at"),
         )
 
         private fun JsonObject.toWindowFromLimit() = ClaudeQuotaWindow(
-            usedPercentage = number("percent") ?: number("utilization"),
+            usedPercentage = percent(number("percent") ?: number("utilization")),
             resetsAtEpochSeconds = epochSeconds("resets_at"),
         )
 
@@ -142,6 +142,9 @@ class ClaudeCodeUsageManager(private val toolchain: ClaudeCodeToolchain) {
 
         private fun JsonObject.number(key: String): Double? =
             (this[key] as? JsonPrimitive)?.doubleOrNull
+
+        /** The usage endpoint has returned both 0..1 utilization and 0..100 percent values. */
+        private fun percent(value: Double?): Double? = value?.let { if (it in 0.0..1.0) it * 100.0 else it }
 
         private fun JsonObject.epochSeconds(key: String): Long? {
             val primitive = this[key] as? JsonPrimitive ?: return null

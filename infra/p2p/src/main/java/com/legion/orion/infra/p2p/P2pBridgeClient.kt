@@ -161,6 +161,20 @@ class P2pBridgeClient @Inject constructor() {
     suspend fun cancelBuildJob(peerId: String, jobId: String) =
         post("/build/cancel", buildJsonObject { put("peerId", peerId); put("jobId", jobId) })
 
+    /** Accept or reject an inbound [P2pEvent.AssetPushOffer]. */
+    suspend fun respondAssetPush(peerId: String, requestId: String, accept: Boolean, reason: String? = null) =
+        post("/asset/respond", buildJsonObject {
+            put("peerId", peerId); put("requestId", requestId); put("accept", accept)
+            if (reason != null) put("reason", reason)
+        })
+
+    /** Final ack once the reassembled asset has been written (or failed) locally. */
+    suspend fun sendAssetPushResult(peerId: String, requestId: String, ok: Boolean, error: String? = null) =
+        post("/asset/result", buildJsonObject {
+            put("peerId", peerId); put("requestId", requestId); put("ok", ok)
+            if (error != null) put("error", error)
+        })
+
     /**
      * Cold Flow over the bridge SSE stream. One EventSource per collection; on failure/close the
      * flow completes (with cause) so a collector can reconnect via `retryWhen`.
@@ -223,6 +237,12 @@ class P2pBridgeClient @Inject constructor() {
                 .let { P2pEvent.BuildLog(it.peerId, it.jobId, it.line) }
             "build-result" -> json.decodeFromJsonElement(BuildResultData.serializer(), data!!)
                 .let { P2pEvent.BuildResult(it.peerId, it.jobId, it.ok, it.artifactName, it.artifactBase64, it.error) }
+            "asset-push-offer" -> json.decodeFromJsonElement(AssetPushOfferData.serializer(), data!!)
+                .let { P2pEvent.AssetPushOffer(it.peerId, it.requestId, it.fileName, it.sizeBytes) }
+            "asset-push-chunk" -> json.decodeFromJsonElement(AssetPushChunkData.serializer(), data!!)
+                .let { P2pEvent.AssetPushChunk(it.peerId, it.requestId, it.data, it.eof) }
+            "asset-push-error" -> json.decodeFromJsonElement(AssetPushErrorData.serializer(), data!!)
+                .let { P2pEvent.AssetPushError(it.peerId, it.requestId, it.error) }
             else -> P2pEvent.Unknown(event)
         }
     }.getOrElse { Log.w(TAG, "bad SSE event: $raw", it); null }

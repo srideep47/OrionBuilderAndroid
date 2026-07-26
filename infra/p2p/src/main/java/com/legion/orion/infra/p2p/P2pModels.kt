@@ -129,6 +129,11 @@ sealed interface P2pEvent {
     data class BuildAccepted(val peerId: String, val jobId: String) : P2pEvent
     data class BuildLog(val peerId: String, val jobId: String, val line: String) : P2pEvent
     data class BuildResult(val peerId: String, val jobId: String, val ok: Boolean, val artifactName: String?, val artifactBase64: String?, val error: String?) : P2pEvent
+    // Asset push (phone-originated protocol addition — no desktop Orion Builder counterpart exists
+    // yet; this does NOT mirror an existing desktop schema like the event families above do).
+    data class AssetPushOffer(val peerId: String, val requestId: String, val fileName: String, val sizeBytes: Long) : P2pEvent
+    data class AssetPushChunk(val peerId: String, val requestId: String, val data: String, val eof: Boolean) : P2pEvent
+    data class AssetPushError(val peerId: String, val requestId: String, val error: String) : P2pEvent
     data class Unknown(val event: String) : P2pEvent
 }
 
@@ -190,3 +195,12 @@ internal data class BuildResultData(
     val artifactBase64: String? = null,
     val error: String? = null,
 )
+
+@Serializable
+internal data class AssetPushOfferData(val peerId: String, val requestId: String, val fileName: String, val sizeBytes: Long = 0)
+
+@Serializable
+internal data class AssetPushChunkData(val peerId: String, val requestId: String, val data: String = "", val eof: Boolean = false)
+
+@Serializable
+internal data class AssetPushErrorData(val peerId: String, val requestId: String, val error: String = "")

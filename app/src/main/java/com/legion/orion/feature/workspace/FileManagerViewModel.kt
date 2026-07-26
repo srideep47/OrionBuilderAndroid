@@ -1,11 +1,16 @@
 package com.legion.orion.feature.workspace
 
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.legion.orion.core.database.ProjectEntity
 import com.legion.orion.data.project.ActiveProjectStore
 import com.legion.orion.data.project.ProjectManager
+import com.legion.orion.util.uniqueDestination
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -86,6 +91,7 @@ private sealed interface ClipboardOp {
 class FileManagerViewModel @Inject constructor(
     private val projectManager: ProjectManager,
     private val activeProject: ActiveProjectStore,
+    @ApplicationContext private val context: Context,
 ) : ViewModel() {
 
     val projects: StateFlow<List<ProjectEntity>> = projectManager.observeProjects()
@@ -382,17 +388,44 @@ class FileManagerViewModel @Inject constructor(
         if (op.cut && activeProject.projectId.value in op.ids) activeProject.set(destinationProjectId)
     }
 
-    private fun uniqueDestination(dir: File, name: String): File {
-        var candidate = File(dir, name)
-        if (!candidate.exists()) return candidate
-        val base = name.substringBeforeLast('.', name)
-        val ext = name.substringAfterLast('.', "").let { if (it.isNotEmpty()) ".$it" else "" }
-        var i = 1
-        while (candidate.exists()) {
-            candidate = File(dir, "$base ($i)$ext")
-            i++
+    /** Copies each picked SAF document into the currently open folder (not an auto-categorized
+     * subfolder — matches every other action here, which operates on [currentDir]). Real display
+     * names are queried separately since `content://` URIs don't carry a filename directly. */
+    fun importFiles(uris: List<Uri>) {
+        val dir = currentDir ?: return
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(busy = true, error = null)
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    var count = 0
+                    uris.forEach { uri ->
+                        val name = queryDisplayName(uri) ?: return@forEach
+                        val dest = uniqueDestination(dir, name)
+                        val opened = context.contentResolver.openInputStream(uri)?.use { input ->
+                            FileOutputStream(dest).use { input.copyTo(it) }
+                            true
+                        } ?: false
+                        if (opened) count++
+                    }
+                    count
+                }
+            }
+            _ui.value = _ui.value.copy(
+                busy = false,
+                error = result.exceptionOrNull()?.message,
+                notice = result.getOrNull()?.let { "Imported $it file(s)" },
+            )
+            refresh()
         }
-        return candidate
+    }
+
+    private fun queryDisplayName(uri: Uri): String? {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            val col = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (col >= 0 && cursor.moveToFirst()) return cursor.getString(col)
+        }
+        return uri.lastPathSegment
     }
 
     /** Size (recursive for a folder), item count, and dates for the Properties sheet. */
