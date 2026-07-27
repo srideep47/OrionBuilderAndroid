@@ -57,6 +57,8 @@ import com.legion.orion.feature.chat.ChatContent
 import com.legion.orion.feature.chat.ChatMode
 import com.legion.orion.feature.chat.ChatViewModel
 import com.legion.orion.feature.chat.ClaudeCodeOptionsSheet
+import com.legion.orion.feature.chat.CodexOptionsSheet
+import com.legion.orion.feature.chat.isAgentCli
 import com.legion.orion.feature.chat.CommandHeader
 import com.legion.orion.feature.chat.GodotChatCard
 import com.legion.orion.feature.chat.HistorySheet
@@ -123,10 +125,13 @@ fun CodeScreen(
     var drawerOpen by remember { mutableStateOf(false) }
     var modelSheetOpen by remember { mutableStateOf(false) }
     var claudeOptionsSheetOpen by remember { mutableStateOf(false) }
+    var codexOptionsSheetOpen by remember { mutableStateOf(false) }
     var projectPickerOpen by remember { mutableStateOf(false) }
 
     val openModelPicker = {
-        if (ui.mode == ChatMode.CLAUDE_CODE) {
+        if (ui.mode == ChatMode.CODEX) {
+            codexOptionsSheetOpen = true
+        } else if (ui.mode == ChatMode.CLAUDE_CODE) {
             claudeOptionsSheetOpen = true
         } else {
             ui.selectedProvider?.let(chatVm::loadModelsFor)
@@ -275,14 +280,26 @@ fun CodeScreen(
                 onSignIn = chatVm::beginClaudeCodeLogin,
                 onSwitchAccount = chatVm::switchClaudeCodeAccount,
                 onLogout = chatVm::logoutClaudeCode,
+                onSwitchToCodex = { chatVm.switchEngine(ChatMode.CODEX) },
                 onDismiss = { claudeOptionsSheetOpen = false },
+            )
+        }
+        if (codexOptionsSheetOpen) {
+            CodexOptionsSheet(
+                ui = ui,
+                onPick = { model, effort, sandbox -> chatVm.setCodexOptions(model, effort, sandbox) },
+                onSignIn = chatVm::beginCodexLogin,
+                onLogout = chatVm::signOutCodex,
+                onReinstall = { chatVm.installCodexRuntime(force = true) },
+                onSwitchToClaude = { chatVm.switchEngine(ChatMode.CLAUDE_CODE) },
+                onDismiss = { codexOptionsSheetOpen = false },
             )
         }
         if (projectPickerOpen) {
             ProjectPickerSheet(
                 projects = availableProjects,
                 activeProjectName = ui.projectName,
-                showJustChat = ui.mode == ChatMode.CLAUDE_CODE,
+                showJustChat = ui.mode.isAgentCli,
                 onNewProject = { chatVm.startFreshProject(); projectPickerOpen = false },
                 onJustChat = { chatVm.selectJustChat(); projectPickerOpen = false },
                 onSelect = { chatVm.selectProject(it); projectPickerOpen = false },

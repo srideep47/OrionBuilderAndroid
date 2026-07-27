@@ -14,10 +14,16 @@ import com.legion.orion.claudecode.ClaudeModelQuota
 import com.legion.orion.claudecode.ClaudeToolBridge
 import com.legion.orion.claudecode.ClaudePermissionDecision
 import com.legion.orion.claudecode.StreamJsonEventMapper
+import com.legion.orion.codex.CodexAuthManager
+import com.legion.orion.codex.CodexEventMapper
+import com.legion.orion.codex.CodexInstaller
+import com.legion.orion.codex.CodexProcess
+import com.legion.orion.codex.CodexToolchain
 import com.legion.orion.build.DevelopmentWorkService
 import com.legion.orion.core.database.ChatEntity
 import com.legion.orion.core.database.ClaudeCodeSessionDao
 import com.legion.orion.core.database.ClaudeCodeSessionEntity
+import com.legion.orion.core.database.CodexSessionEntity
 import com.legion.orion.core.database.ProviderEntity
 import com.legion.orion.core.datastore.SettingsRepository
 import com.legion.orion.data.chat.ChatRepository
@@ -78,14 +84,29 @@ private const val COMPACTION_SYSTEM_PROMPT =
 
 /** Title shown for a chat that has not been named yet; chats keeping this title get auto-titled. */
 private const val PLACEHOLDER_TITLE = "New chat"
+
+/** How many trailing messages a cross-engine handoff brief carries. Enough to convey the current thread
+ * of work without spending a large slice of the incoming engine's fresh context window — the code itself
+ * is the real handoff, and both engines read the same working tree. */
+private const val HANDOFF_MESSAGE_COUNT = 12
+
+/** Per-message cap inside a handoff brief, so one giant pasted log can't crowd out every other message. */
+private const val HANDOFF_MESSAGE_CHAR_LIMIT = 1500
 private const val TITLE_SYSTEM_PROMPT =
     "You generate a short, specific title for a chat based on the user's request. " +
         "Reply with ONLY the title — 3 to 6 words, Title Case, no surrounding quotes, " +
         "no trailing punctuation, and no preamble or explanation."
 
-/** Unified command modes: plain chat, agentic build (Orion's own tool loop), or real Claude Code CLI
- * (subscription-billed, runs in its own bundled Linux environment — see `com.legion.orion.claudecode`). */
-enum class ChatMode { CHAT, BUILD, CLAUDE_CODE }
+/** Unified command modes: plain chat, agentic build (Orion's own tool loop), or one of the two real
+ * agent CLIs — Claude Code (`com.legion.orion.claudecode`) and Codex (`com.legion.orion.codex`) — both
+ * subscription-billed and both running in the same bundled Linux environment against the same projects.
+ *
+ * [CLAUDE_CODE] and [CODEX] are interchangeable per chat: see [ChatViewModel.switchEngine], which hands
+ * a conversation from one to the other (the usual reason being that one account hit its rate limit). */
+enum class ChatMode { CHAT, BUILD, CLAUDE_CODE, CODEX }
+
+/** The two real-CLI modes, i.e. the ones [ChatViewModel.switchEngine] can move a conversation between. */
+val ChatMode.isAgentCli: Boolean get() = this == ChatMode.CLAUDE_CODE || this == ChatMode.CODEX
 
 data class StreamingMessage(
     val messageId: String,
@@ -112,7 +133,58 @@ data class ChatUiState(
     val contextWindowTokens: Int = 32_768,
     val modelSheetModels: List<String> = emptyList(),
     val claudeCode: ClaudeCodeUiState = ClaudeCodeUiState(),
+    val codex: CodexUiState = CodexUiState(),
 )
+
+/**
+ * State for the Codex mode's provisioning/sign-in surface, the counterpart of [ClaudeCodeUiState].
+ *
+ * Intentionally NOT merged with [ClaudeCodeUiState] behind one "agent CLI" state class: the two engines
+ * genuinely differ in what they can report (Claude has dollar cost and 5h/7d quota windows; Codex has
+ * token counts and a device-code login), and collapsing them would mean a pile of fields that are null
+ * for one engine and meaningful for the other.
+ */
+data class CodexUiState(
+    val checking: Boolean = false,
+    val installed: Boolean = false,
+    /** True when the shared Linux runtime is present and only Codex's own binary is missing — the UI
+     * offers a ~105MB download rather than a full runtime install. */
+    val needsOnlyBinary: Boolean = false,
+    val installProgress: String? = null,
+    val installedVersion: String? = null,
+    val loggedIn: Boolean = false,
+    /** e.g. "ChatGPT subscription" — Codex reports the auth mode rather than an account email. */
+    val authMethod: String? = null,
+    /** Non-null while a device-code login is waiting for the user to approve it in a browser. */
+    val loginUrl: String? = null,
+    /** The short code the user types on the verification page; some flows embed it in the URL instead. */
+    val loginUserCode: String? = null,
+    val loginBusy: Boolean = false,
+    val loginError: String? = null,
+    val accountActionBusy: Boolean = false,
+    val accountActionError: String? = null,
+    /** null = no `-m` flag, Codex uses its own default model. */
+    val model: String? = null,
+    val effort: String = "medium",
+    /** danger-full-access — see SettingsRepository.codexSandbox for why that is right under proot. */
+    val sandbox: String = "danger-full-access",
+    val lastTurnInputTokens: Int = 0,
+    val lastTurnOutputTokens: Int = 0,
+    val lastTurnCacheReadTokens: Int = 0,
+    val contextUsedTokens: Long = 0,
+    val contextWindowTokens: Long = 0,
+) {
+    companion object {
+        /** null entry renders as "Default" and omits `-m` entirely. */
+        val MODEL_OPTIONS: List<String?> = listOf(null, "gpt-5-codex", "gpt-5", "o4-mini")
+
+        /** Same vocabulary as Claude's effort control so the two option sheets stay symmetrical; passed
+         * through as `-c model_reasoning_effort`. Codex has no "max" tier. */
+        val EFFORT_OPTIONS = listOf("low", "medium", "high", "xhigh")
+
+        val SANDBOX_OPTIONS = listOf("danger-full-access", "workspace-write", "read-only")
+    }
+}
 
 /** State for the Claude Code mode's provisioning/sign-in surface. */
 data class ClaudeCodeUiState(
@@ -182,6 +254,7 @@ class ChatViewModel @Inject constructor(
     private val controller: InferenceController,
     @ApplicationContext private val appContext: Context,
     private val claudeCodeSessionDao: ClaudeCodeSessionDao,
+    private val codexSessionDao: com.legion.orion.core.database.CodexSessionDao,
     private val devServerState: com.legion.orion.runtime.DevServerState,
     private val claudeToolBridge: ClaudeToolBridge,
 ) : ViewModel() {
@@ -210,6 +283,15 @@ class ChatViewModel @Inject constructor(
     private val claudeUsageRefreshMutex = Mutex()
     private var lastClaudeUsageRefreshAt = 0L
     private var lastClaudeUsageFailureAt = 0L
+
+    // ── Codex (real CLI) ──
+    // Shares the Claude toolchain's proot + Ubuntu rootfs rather than provisioning a second one, which
+    // is also what makes both engines see the same projects/git/terminal (see CodexToolchain).
+    private val codexToolchain by lazy { CodexToolchain(claudeCodeToolchain) }
+    private val codexInstaller by lazy { CodexInstaller(codexToolchain) }
+    private val codexAuth by lazy { CodexAuthManager(codexToolchain) }
+    private val codexProcesses = mutableMapOf<String, CodexProcess>()
+    private var codexLoginSession: CodexAuthManager.LoginSession? = null
 
     val chats: StateFlow<List<ChatEntity>> = chatRepo.observeChats()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -249,11 +331,7 @@ class ChatViewModel @Inject constructor(
                 activeProject.set(recent.projectId)
                 _ui.value = _ui.value.copy(
                     activeChatId = recent.id,
-                    mode = when (recent.mode) {
-                        "build", "agent" -> ChatMode.BUILD
-                        "claude_code" -> ChatMode.CLAUDE_CODE
-                        else -> ChatMode.CHAT
-                    },
+                    mode = chatModeOf(recent.mode),
                     projectName = recent.projectId?.let { projects.get(it)?.name },
                 )
                 rebuildConversationFrom(recent.id)
@@ -261,6 +339,7 @@ class ChatViewModel @Inject constructor(
                 localSessionPrimed = conversation.isEmpty()
                 if (!localSessionPrimed) runCatching { controller.reset() }
                 if (recent.mode == "claude_code") checkClaudeCodeReadiness()
+                if (recent.mode == "codex") checkCodexReadiness()
             }
             backfillChatTitles()
         }
@@ -320,9 +399,10 @@ class ChatViewModel @Inject constructor(
 
     fun onInput(text: String) { _ui.value = _ui.value.copy(input = text) }
 
-    /** Copies selected documents into the project before Claude sees them; source URIs are never retained. */
+    /** Copies selected documents into the project before the agent sees them; source URIs are never
+     * retained. Serves both CLI engines — the files land in the shared project sandbox either way. */
     fun addClaudeCodeAttachments(uris: List<Uri>) {
-        if (uris.isEmpty() || _ui.value.mode != ChatMode.CLAUDE_CODE) return
+        if (uris.isEmpty() || !_ui.value.mode.isAgentCli) return
         viewModelScope.launch {
             runCatching {
                 val pid = projectId ?: projectResolutionMutex.withLock {
@@ -382,6 +462,30 @@ class ChatViewModel @Inject constructor(
             // Node-based "start preview" flow, which Claude Code never touches.
             projectId?.let { devServerState.set(com.legion.orion.runtime.DevServerState.Running(ClaudeCodeProcess.PREVIEW_PORT, projects.dirFor(it).path)) }
         }
+        if (mode == ChatMode.CODEX) {
+            // Same reasoning as the Claude branch above, for the same reason: a Codex chat's continuity
+            // is a stored thread id tied to one project, so auto-attaching "whichever project is first"
+            // would silently resume an unrelated conversation. Project creation happens in [runCodex].
+            checkCodexReadiness()
+            projectId?.let { devServerState.set(com.legion.orion.runtime.DevServerState.Running(ClaudeCodeProcess.PREVIEW_PORT, projects.dirFor(it).path)) }
+        }
+    }
+
+    /** The chat-mode string persisted on `ChatEntity.mode` ⇄ [ChatMode]. Kept in one place because it is
+     * read on cold start, on chat open, and on project bind, and a mode missing from one of those
+     * branches silently degrades a chat to plain CHAT. */
+    private fun chatModeOf(stored: String?): ChatMode = when (stored) {
+        "build", "agent" -> ChatMode.BUILD
+        "claude_code" -> ChatMode.CLAUDE_CODE
+        "codex" -> ChatMode.CODEX
+        else -> ChatMode.CHAT
+    }
+
+    private fun modeString(mode: ChatMode): String = when (mode) {
+        ChatMode.BUILD -> "build"
+        ChatMode.CLAUDE_CODE -> "claude_code"
+        ChatMode.CODEX -> "codex"
+        ChatMode.CHAT -> "ask"
     }
 
     /** Refreshes install/auth status for the Claude Code sign-in surface. */
@@ -411,6 +515,171 @@ class ChatViewModel @Inject constructor(
 
     fun refreshClaudeAccountUsage() {
         viewModelScope.launch { refreshClaudeAccountUsageInternal(force = true) }
+    }
+
+    // ── Codex provisioning / sign-in ──
+
+    /** Refreshes install/auth status for the Codex sign-in surface. */
+    fun checkCodexReadiness() {
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(codex = _ui.value.codex.copy(checking = true))
+            val status = codexToolchain.status()
+            val auth = if (status.provisioned) runCatching { codexAuth.status() }.getOrNull() else null
+            _ui.value = _ui.value.copy(
+                codex = _ui.value.codex.copy(
+                    checking = false,
+                    installed = status.provisioned,
+                    needsOnlyBinary = status.needsOnlyCodexBinary,
+                    installedVersion = status.installedVersion,
+                    loggedIn = auth?.loggedIn == true,
+                    authMethod = auth?.method,
+                    model = settings.codexModel.first(),
+                    effort = settings.codexEffort.first(),
+                    sandbox = settings.codexSandbox.first(),
+                ),
+            )
+        }
+    }
+
+    /** Downloads the Codex CLI into the shared rootfs (~105MB, expands to ~257MB). */
+    fun installCodexRuntime(force: Boolean = false) {
+        if (_ui.value.codex.installProgress != null) return
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(codex = _ui.value.codex.copy(installProgress = "Starting download…", loginError = null))
+            runCatching {
+                codexInstaller.install(force = force) { progress ->
+                    _ui.value = _ui.value.copy(codex = _ui.value.codex.copy(installProgress = progress))
+                }
+            }.onFailure {
+                _ui.value = _ui.value.copy(
+                    codex = _ui.value.codex.copy(
+                        installProgress = null,
+                        loginError = "Codex install failed: ${it.message}",
+                    ),
+                )
+                return@launch
+            }
+            _ui.value = _ui.value.copy(codex = _ui.value.codex.copy(installProgress = null))
+            checkCodexReadiness()
+        }
+    }
+
+    /**
+     * Starts `codex login --device-auth`. The verification URL and code land in `ui.codex.loginUrl` /
+     * `loginUserCode` for the user to open in any browser — including on another device, which is the
+     * main reason this flow was chosen over the redirect-based one.
+     */
+    fun beginCodexLogin() {
+        if (_ui.value.codex.loginBusy || _ui.value.codex.accountActionBusy) return
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(
+                codex = _ui.value.codex.copy(
+                    loginBusy = true,
+                    loginError = null,
+                    loginUrl = null,
+                    loginUserCode = null,
+                ),
+            )
+            val session = runCatching {
+                codexAuth.beginDeviceLogin { prompt ->
+                    _ui.value = _ui.value.copy(
+                        codex = _ui.value.codex.copy(loginUrl = prompt.url, loginUserCode = prompt.userCode),
+                    )
+                }
+            }.getOrElse { failure ->
+                _ui.value = _ui.value.copy(
+                    codex = _ui.value.codex.copy(
+                        loginBusy = false,
+                        loginError = failure.message ?: "Could not start Codex sign-in",
+                    ),
+                )
+                return@launch
+            }
+            codexLoginSession = session
+
+            // The CLI polls for approval itself, so this just waits for its exit. Keeping the await here
+            // (rather than requiring a second UI action, as the Claude paste-a-code flow does) is what
+            // makes the device-code flow one-tap from the user's side.
+            val ok = session.awaitResult()
+            codexLoginSession = null
+            _ui.value = _ui.value.copy(
+                codex = _ui.value.codex.copy(
+                    loginBusy = false,
+                    loginUrl = null,
+                    loginUserCode = null,
+                    loginError = if (ok) null else {
+                        session.output().lineSequence().lastOrNull { it.isNotBlank() }?.take(240)
+                            ?: "Codex sign-in did not complete"
+                    },
+                ),
+            )
+            if (ok) checkCodexReadiness()
+        }
+    }
+
+    fun cancelCodexLogin() {
+        codexLoginSession?.cancel()
+        codexLoginSession = null
+        _ui.value = _ui.value.copy(
+            codex = _ui.value.codex.copy(loginBusy = false, loginUrl = null, loginUserCode = null),
+        )
+    }
+
+    fun signOutCodex() {
+        if (_ui.value.codex.accountActionBusy || _ui.value.codex.loginBusy) return
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(
+                codex = _ui.value.codex.copy(accountActionBusy = true, accountActionError = null),
+            )
+            runCatching {
+                // Stop live work and drop every stored thread id BEFORE signing out: a thread belongs to
+                // the account that created it, so resuming one under a different account must never be
+                // attempted. Same ordering as the Claude sign-out path.
+                codexProcesses.values.forEach { it.stop() }
+                codexProcesses.clear()
+                codexOptionsDirty = false
+                codexSessionDao.clearAll()
+                codexAuth.logout()
+            }.onFailure { failure ->
+                _ui.value = _ui.value.copy(
+                    codex = _ui.value.codex.copy(
+                        accountActionBusy = false,
+                        accountActionError = failure.message?.take(240) ?: "Codex sign-out failed",
+                    ),
+                )
+                return@launch
+            }
+            _ui.value = _ui.value.copy(
+                codex = _ui.value.codex.copy(
+                    accountActionBusy = false,
+                    loggedIn = false,
+                    authMethod = null,
+                    lastTurnInputTokens = 0,
+                    lastTurnOutputTokens = 0,
+                    lastTurnCacheReadTokens = 0,
+                    contextUsedTokens = 0,
+                ),
+            )
+            checkCodexReadiness()
+        }
+    }
+
+    /** Codex counterpart of [claudeCodeOptionsDirty]; see that field for why teardown is deferred. */
+    private var codexOptionsDirty = false
+
+    fun setCodexOptions(model: String?, effort: String, sandbox: String) {
+        _ui.value = _ui.value.copy(
+            codex = _ui.value.codex.copy(model = model, effort = effort, sandbox = sandbox),
+        )
+        viewModelScope.launch {
+            settings.setCodexOptions(model, effort, sandbox)
+            if (_ui.value.busy) {
+                codexOptionsDirty = true
+            } else {
+                codexProcesses.values.forEach { it.stop() }
+                codexProcesses.clear()
+            }
+        }
     }
 
     private suspend fun refreshClaudeAccountUsageInternal(force: Boolean) {
@@ -628,18 +897,20 @@ class ChatViewModel @Inject constructor(
         val text = state.input.trim()
         if ((text.isEmpty() && state.attachments.isEmpty()) || state.busy) return
 
-        if (state.mode == ChatMode.CLAUDE_CODE) {
+        if (state.mode.isAgentCli) {
             viewModelScope.launch {
                 _ui.value = state.copy(input = "", attachments = emptyList(), busy = true, error = null, notice = null)
-                val chatId = chatIdFlow.value ?: chatRepo.createChat(PLACEHOLDER_TITLE, "claude_code")
+                val chatId = chatIdFlow.value ?: chatRepo.createChat(PLACEHOLDER_TITLE, modeString(state.mode))
                     .also {
                         chatIdFlow.value = it.id
                         _ui.value = _ui.value.copy(activeChatId = it.id)
                     }.id
                 chatRepo.addUserMessage(chatId, text, state.attachments)
+                // Attachment paths are described the same way for both engines: they are just real files
+                // inside the shared project sandbox, and both CLIs read them with their own file tools.
                 val prompt = claudePromptWithAttachments(text, state.attachments)
                 conversation.add(ChatMessage(ChatMessage.Role.USER, prompt))
-                runClaudeCode(chatId, prompt)
+                if (state.mode == ChatMode.CODEX) runCodex(chatId, prompt) else runClaudeCode(chatId, prompt)
             }
             return
         }
@@ -1029,6 +1300,250 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    // ── Codex (real CLI) ──
+
+    /** Reuses (or lazily creates) the per-project Codex driver. Unlike the Claude equivalent this holds
+     * no OS process between turns — `codex exec` is one-shot — so this map exists only to avoid rebuilding
+     * the same argument set and to give [setCodexOptions] something to invalidate. */
+    private suspend fun codexSessionFor(projectId: String, projectDir: File): CodexProcess {
+        codexProcesses[projectId]?.let { return it }
+        val existing = codexSessionDao.get(projectId)
+        val cx = _ui.value.codex
+        val process = CodexProcess(
+            toolchain = codexToolchain,
+            projectDir = projectDir,
+            threadId = existing?.threadId,
+            onThreadIdAssigned = { tid ->
+                viewModelScope.launch {
+                    codexSessionDao.upsert(CodexSessionEntity(projectId, tid, System.currentTimeMillis()))
+                }
+            },
+            model = cx.model,
+            effort = cx.effort,
+            sandbox = cx.sandbox,
+            toolBridgePort = claudeToolBridge.start(),
+            toolBridgeToken = claudeToolBridge.token,
+        )
+        codexProcesses[projectId] = process
+        return process
+    }
+
+    /**
+     * Runs one Codex turn. Intentionally the same shape as [runClaudeCode] — blank-project creation under
+     * the shared mutex, a GitSnapshotter safety snapshot before handing over control, the foreground work
+     * service, the fixed preview port, auto-naming on first success — because everything except the
+     * engine itself is genuinely shared behaviour, and the two paths diverging would show up as one
+     * engine quietly missing rollback or preview.
+     */
+    private suspend fun runCodex(chatId: String, userText: String) {
+        val isFreshProject = projectId == null
+        if (isFreshProject) {
+            projectResolutionMutex.withLock {
+                if (projectId == null) projectId = projects.createBlankProject("New Project").id
+            }
+        }
+        val pid = projectId!!
+        activeProject.set(pid)
+        chatRepo.bindChatProject(chatId, pid, "codex")
+        _ui.value = _ui.value.copy(projectName = projects.get(pid)?.name)
+        val dir = projects.dirFor(pid)
+
+        val status = codexToolchain.status()
+        if (!status.provisioned) {
+            _ui.value = _ui.value.copy(
+                busy = false,
+                error = if (status.needsOnlyCodexBinary) {
+                    "Codex isn't downloaded yet — open the mode picker to install it."
+                } else {
+                    "The Linux runtime isn't installed yet — open the mode picker to install it."
+                },
+            )
+            return
+        }
+        val auth = runCatching { codexAuth.status() }.getOrNull()
+        if (auth?.loggedIn != true) {
+            _ui.value = _ui.value.copy(busy = false, error = "Sign in to Codex first — open the mode picker to sign in.")
+            return
+        }
+
+        // Same fixed preview port as Claude Code, and the same instructions telling the agent to use it
+        // (both engines receive ORION_AGENT_INSTRUCTIONS), so the Preview pane behaves identically.
+        devServerState.set(com.legion.orion.runtime.DevServerState.Running(ClaudeCodeProcess.PREVIEW_PORT, dir.path))
+
+        val snapshotter = GitSnapshotter(dir)
+        val snapshotRef = runCatching { snapshotter.snapshot(pid, "codex_${System.currentTimeMillis()}") }.getOrNull()
+
+        val process = codexSessionFor(pid, dir)
+        val assistantId = chatRepo.beginAssistantMessage(chatId)
+        val mapper = CodexEventMapper()
+        streamingFlow.value = StreamingMessage(assistantId, mapper.currentParts)
+
+        streamJob?.cancel()
+        streamJob = viewModelScope.launch {
+            val workId = "codex:$pid"
+            DevelopmentWorkService.acquire(appContext, workId, "Codex · ${_ui.value.projectName ?: "project"}")
+            var errorMsg: String? = null
+            var resultText: String? = null
+            try {
+                process.sendTurn(userText).collect { obj ->
+                    when (val outcome = mapper.accept(obj)) {
+                        is CodexEventMapper.Outcome.TurnComplete -> {
+                            resultText = outcome.resultText
+                            if (outcome.isError) errorMsg = outcome.resultText ?: "Codex reported an error"
+                            outcome.usage?.let { u ->
+                                _ui.value = _ui.value.copy(
+                                    codex = _ui.value.codex.copy(
+                                        lastTurnInputTokens = u.inputTokens,
+                                        lastTurnOutputTokens = u.outputTokens,
+                                        lastTurnCacheReadTokens = u.cacheReadTokens,
+                                    ),
+                                )
+                            }
+                        }
+                        is CodexEventMapper.Outcome.ProcessDied -> errorMsg = outcome.message
+                        CodexEventMapper.Outcome.InProgress -> {}
+                    }
+                    val live = mapper.liveContextUsage
+                    _ui.value = _ui.value.copy(
+                        codex = _ui.value.codex.copy(
+                            contextUsedTokens = live.usedTokens,
+                            contextWindowTokens = live.contextWindowTokens.takeIf { it > 0 }
+                                ?: _ui.value.codex.contextWindowTokens,
+                        ),
+                    )
+                    val parts = if (snapshotRef != null) {
+                        mapper.currentParts.map { p ->
+                            if (p.type == PartType.TOOL_CALL && p.tool != null && p.tool.snapshotRef == null) {
+                                p.copy(tool = p.tool.copy(snapshotRef = snapshotRef.ref, snapshotCommit = snapshotRef.commit))
+                            } else p
+                        }
+                    } else {
+                        mapper.currentParts
+                    }
+                    streamingFlow.value = StreamingMessage(assistantId, parts)
+                }
+            } catch (c: CancellationException) {
+                withContext(NonCancellable) { chatRepo.finishAssistantParts(chatId, assistantId, mapper.currentParts, MsgStatus.CANCELLED) }
+                streamingFlow.value = null
+                _ui.value = _ui.value.copy(busy = false)
+                DevelopmentWorkService.release(appContext, workId)
+                throw c
+            } catch (t: Throwable) {
+                errorMsg = t.message ?: "Codex run failed"
+            }
+            DevelopmentWorkService.release(appContext, workId)
+            val status2 = if (errorMsg == null) MsgStatus.COMPLETE else MsgStatus.ERROR
+            chatRepo.finishAssistantParts(chatId, assistantId, mapper.currentParts, status2)
+            if (!resultText.isNullOrBlank()) conversation.add(ChatMessage(ChatMessage.Role.ASSISTANT, resultText!!))
+            streamingFlow.value = null
+            _ui.value = _ui.value.copy(busy = false, error = errorMsg)
+            if (status2 == MsgStatus.COMPLETE) {
+                withContext(NonCancellable) { maybeNameClaudeCodeChatAndProject(chatId, pid, isFreshProject, userText) }
+            }
+            if (codexOptionsDirty) {
+                codexOptionsDirty = false
+                codexProcesses.values.forEach { it.stop() }
+                codexProcesses.clear()
+            }
+        }
+    }
+
+    // ── Engine handoff ──
+
+    /**
+     * Moves the current chat from one real CLI to the other, seeding the incoming engine with a brief
+     * describing what has happened so far. The usual trigger is one account running out of rate-limit
+     * headroom mid-task.
+     *
+     * **What this is and isn't.** Session ids are not portable — Claude's `--resume` id indexes
+     * `~/.claude`, Codex's thread id indexes `~/.codex/sessions`, and neither can read the other's store.
+     * So this does not move a conversation object; it starts a fresh one in the other engine and tells it
+     * what it missed. That is far less lossy than it sounds, because the expensive shared context is not
+     * in the transcript at all — it is the working tree and git history, which both engines already see
+     * identically. What is genuinely lost is the outgoing engine's own cached reasoning.
+     *
+     * The brief is stored as a real user message, so it is visible in the transcript rather than being
+     * invisible prompt injection — if the handoff produces a confused reply, the reason is on screen.
+     */
+    fun switchEngine(to: ChatMode) {
+        if (!to.isAgentCli) return
+        val from = _ui.value.mode
+        if (from == to) return
+        if (_ui.value.busy) {
+            _ui.value = _ui.value.copy(error = "Wait for the current turn to finish before switching engines.")
+            return
+        }
+
+        viewModelScope.launch {
+            val chatId = chatIdFlow.value
+            // With no chat yet there is nothing to hand off; just switch and let the first send start
+            // normally in the new engine.
+            if (chatId == null) {
+                setMode(to)
+                return@launch
+            }
+
+            _ui.value = _ui.value.copy(mode = to, error = null)
+            chatRepo.bindChatProject(chatId, projectId, modeString(to))
+            if (to == ChatMode.CODEX) checkCodexReadiness() else checkClaudeCodeReadiness()
+
+            val brief = buildHandoffBrief(from, to)
+            if (brief != null) {
+                // Queued into the input rather than sent, so the user can add "…and finish the migration"
+                // or delete it outright. Auto-sending would spend a turn of the engine they just switched
+                // to precisely because they were short on quota.
+                _ui.value = _ui.value.copy(
+                    input = brief,
+                    notice = "Switched to ${engineLabel(to)}. A handoff summary is in the input box — edit or send it.",
+                )
+            } else {
+                _ui.value = _ui.value.copy(notice = "Switched to ${engineLabel(to)}.")
+            }
+        }
+    }
+
+    private fun engineLabel(mode: ChatMode): String = when (mode) {
+        ChatMode.CODEX -> "Codex"
+        ChatMode.CLAUDE_CODE -> "Claude Code"
+        ChatMode.BUILD -> "Build"
+        ChatMode.CHAT -> "Chat"
+    }
+
+    /**
+     * Builds the text handed to the incoming engine.
+     *
+     * Deliberately a compaction rather than a verbatim replay: a long agentic transcript is mostly tool
+     * output (file dumps, build logs) that the new engine can simply re-read from the working tree, and
+     * pasting all of it would spend a large share of the fresh context window restating things that are
+     * already on disk. Assistant text and user intent are what cannot be recovered from the filesystem,
+     * so those are what get kept.
+     */
+    private fun buildHandoffBrief(from: ChatMode, to: ChatMode): String? {
+        if (conversation.isEmpty()) return null
+        val recent = conversation.takeLast(HANDOFF_MESSAGE_COUNT)
+        return buildString {
+            append("Context handoff: this conversation was being handled by ")
+            append(engineLabel(from))
+            append(" and is continuing with ")
+            append(engineLabel(to))
+            append(".\n\nYou are picking up mid-task in an existing project at /root/project. ")
+            append("The working tree and its git history already reflect all work done so far, so inspect ")
+            append("the actual files before assuming anything from the summary below.\n\n")
+            append("Conversation so far (most recent ").append(recent.size).append(" messages")
+            if (conversation.size > recent.size) append(" of ").append(conversation.size)
+            append("):\n")
+            recent.forEach { message ->
+                val who = if (message.role == ChatMessage.Role.USER) "User" else "Assistant"
+                append("\n[").append(who).append("] ")
+                append(message.content.trim().take(HANDOFF_MESSAGE_CHAR_LIMIT))
+                if (message.content.trim().length > HANDOFF_MESSAGE_CHAR_LIMIT) append(" …[truncated]")
+                append('\n')
+            }
+            append("\nContinue from here. Start by confirming the current state of the code rather than ")
+            append("repeating completed work.")
+        }
+    }
+
     fun rollback(tool: ToolView) {
         val ref = tool.snapshotRef ?: return
         val commit = tool.snapshotCommit ?: return
@@ -1097,11 +1612,7 @@ class ChatViewModel @Inject constructor(
         activeProject.set(chat.projectId)
         _ui.value = _ui.value.copy(
             activeChatId = chat.id,
-            mode = when (chat.mode) {
-                "build", "agent" -> ChatMode.BUILD
-                "claude_code" -> ChatMode.CLAUDE_CODE
-                else -> ChatMode.CHAT
-            },
+            mode = chatModeOf(chat.mode),
             projectName = null,
             notice = null,
         )
@@ -1115,6 +1626,7 @@ class ChatViewModel @Inject constructor(
             localSessionPrimed = conversation.isEmpty()
         }
         if (chat.mode == "claude_code") checkClaudeCodeReadiness()
+        if (chat.mode == "codex") checkCodexReadiness()
     }
 
     /** Explicitly continues an existing project in the CURRENT chat (project picker "Continue" pick)
@@ -1124,13 +1636,12 @@ class ChatViewModel @Inject constructor(
         projectId = project.id
         activeProject.set(project.id)
         _ui.value = _ui.value.copy(projectName = project.name)
-        if (_ui.value.mode == ChatMode.CLAUDE_CODE) {
+        if (_ui.value.mode.isAgentCli) {
             devServerState.set(com.legion.orion.runtime.DevServerState.Running(ClaudeCodeProcess.PREVIEW_PORT, project.path))
         }
         viewModelScope.launch {
             chatIdFlow.value?.let { chatId ->
-                val modeStr = when (_ui.value.mode) { ChatMode.BUILD -> "build"; ChatMode.CLAUDE_CODE -> "claude_code"; ChatMode.CHAT -> "ask" }
-                chatRepo.bindChatProject(chatId, project.id, modeStr)
+                chatRepo.bindChatProject(chatId, project.id, modeString(_ui.value.mode))
             }
         }
     }
@@ -1446,5 +1957,9 @@ class ChatViewModel @Inject constructor(
         // app process; --resume (see ClaudeCodeProcess) reconnects the same conversation next time.
         claudeCodeProcesses.values.forEach { it.stop() }
         claudeCodeLoginSession?.cancel()
+        // Codex holds no process between turns, so this only kills a turn that is actually in flight;
+        // its thread id is already persisted, so the next send resumes the same conversation.
+        codexProcesses.values.forEach { it.stop() }
+        codexLoginSession?.cancel()
     }
 }

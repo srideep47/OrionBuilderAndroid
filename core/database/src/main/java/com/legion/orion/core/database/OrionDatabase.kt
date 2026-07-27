@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -29,8 +31,9 @@ import javax.inject.Singleton
         PublishJobEntity::class,
         ChatFtsEntity::class,
         ClaudeCodeSessionEntity::class,
+        CodexSessionEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class OrionDatabase : RoomDatabase() {
@@ -46,6 +49,29 @@ abstract class OrionDatabase : RoomDatabase() {
     abstract fun jobsDao(): JobsDao
     abstract fun chatFtsDao(): ChatFtsDao
     abstract fun claudeCodeSessionDao(): ClaudeCodeSessionDao
+    abstract fun codexSessionDao(): CodexSessionDao
+}
+
+/**
+ * Adds the `codex_sessions` table (see [CodexSessionEntity]).
+ *
+ * This is written as a real migration rather than leaning on the
+ * [RoomDatabase.Builder.fallbackToDestructiveMigration] below, which is still in place for other
+ * schema churn. That fallback is fine for a pre-release schema change that only affects developer
+ * test data, but by now real devices carry real state — chat history, projects, provider
+ * configuration, and (most expensively) the Claude Code session ids that make `--resume` work. This
+ * change only ADDS a table, so destroying all of that to get it would be gratuitous.
+ */
+internal val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `codex_sessions` (" +
+                "`projectId` TEXT NOT NULL, " +
+                "`threadId` TEXT NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`projectId`))",
+        )
+    }
 }
 
 @Module
@@ -56,8 +82,9 @@ object DatabaseModule {
     @Singleton
     fun providesDatabase(@ApplicationContext context: Context): OrionDatabase =
         Room.databaseBuilder(context, OrionDatabase::class.java, "orion.db")
+            .addMigrations(MIGRATION_2_3)
             .fallbackToDestructiveMigrationOnDowngrade()
-            .fallbackToDestructiveMigration() // pre-release: no migration path yet for schema bumps
+            .fallbackToDestructiveMigration() // pre-release: no migration path yet for other schema bumps
             .build()
 
     @Provides fun projectDao(db: OrionDatabase) = db.projectDao()
@@ -72,4 +99,5 @@ object DatabaseModule {
     @Provides fun jobsDao(db: OrionDatabase) = db.jobsDao()
     @Provides fun chatFtsDao(db: OrionDatabase) = db.chatFtsDao()
     @Provides fun claudeCodeSessionDao(db: OrionDatabase) = db.claudeCodeSessionDao()
+    @Provides fun codexSessionDao(db: OrionDatabase) = db.codexSessionDao()
 }

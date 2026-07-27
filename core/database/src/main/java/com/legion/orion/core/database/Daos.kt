@@ -187,3 +187,23 @@ interface ClaudeCodeSessionDao {
     @Query("DELETE FROM claude_code_sessions")
     suspend fun clearAll()
 }
+
+@Dao
+interface CodexSessionDao {
+    @Query("SELECT * FROM codex_sessions WHERE projectId = :projectId")
+    suspend fun get(projectId: String): CodexSessionEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(session: CodexSessionEntity)
+
+    /** Drops one project's thread id so its next turn starts a brand-new Codex conversation. Needed
+     * because a stored id can go stale on its own (a thread created with `--ephemeral` is never
+     * resumable, and `codex exec resume` on a missing id silently starts a fresh thread instead of
+     * failing) — so the id must be clearable without wiping every other project's. */
+    @Query("DELETE FROM codex_sessions WHERE projectId = :projectId")
+    suspend fun clear(projectId: String)
+
+    /** A Codex thread belongs to the signed-in account that created it; never resume it after an account change. */
+    @Query("DELETE FROM codex_sessions")
+    suspend fun clearAll()
+}

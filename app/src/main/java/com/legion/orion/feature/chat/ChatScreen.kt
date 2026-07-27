@@ -141,7 +141,7 @@ internal fun CommandHeader(
     // No app-name/mode-name title text here — deliberately removed (owner direction: it doesn't fit
     // alongside the project + model pills on a ~430dp usable-width phone without wrapping to 2 lines).
     // Don't re-add title/subtitle text to this header without checking first.
-    val projectAware = ui.mode == ChatMode.BUILD || ui.mode == ChatMode.CLAUDE_CODE
+    val projectAware = ui.mode == ChatMode.BUILD || ui.mode.isAgentCli
     Row(
         Modifier
             .fillMaxWidth()
@@ -190,6 +190,10 @@ private fun ModelPill(ui: ChatUiState, engine: EngineState, onClick: () -> Unit)
         ClaudeCodeModelPill(ui.claudeCode, onClick)
         return
     }
+    if (ui.mode == ChatMode.CODEX) {
+        CodexModelPill(ui.codex, onClick)
+        return
+    }
     val provider = ui.selectedProvider
     val ready = engine.status.name == "READY" || engine.status.name == "GENERATING"
     Row(
@@ -220,6 +224,34 @@ private fun ModelPill(ui: ChatUiState, engine: EngineState, onClick: () -> Unit)
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.widthIn(max = 96.dp),
+        )
+        Icon(Icons.Outlined.ExpandMore, null, tint = Cosmos.TextMuted, modifier = Modifier.size(15.dp))
+    }
+}
+
+@Composable
+private fun CodexModelPill(cx: CodexUiState, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .liquidGlass(shape = Liquid.ShapePill, fillTopAlpha = 0.09f)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(if (cx.loggedIn) Cosmos.Green else Cosmos.Amber),
+        )
+        Text(
+            "${cx.model ?: "Default"} · ${claudeEffortLabel(cx.effort)}",
+            style = MaterialTheme.typography.labelMedium,
+            color = Cosmos.Text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 108.dp),
         )
         Icon(Icons.Outlined.ExpandMore, null, tint = Cosmos.TextMuted, modifier = Modifier.size(15.dp))
     }
@@ -330,12 +362,16 @@ internal fun ChatContent(
             visible = ui.busy || ui.liveTokens > 0 ||
                 (ui.mode == ChatMode.CLAUDE_CODE &&
                     (ui.claudeCode.loggedIn || ui.claudeCode.sessionCostUsd > 0 ||
-                        ui.claudeCode.contextWindowTokens > 0)),
+                        ui.claudeCode.contextWindowTokens > 0)) ||
+                (ui.mode == ChatMode.CODEX &&
+                    (ui.codex.loggedIn || ui.codex.lastTurnOutputTokens > 0)),
         ) {
-            if (ui.mode == ChatMode.CLAUDE_CODE) {
-                ClaudeCodeStatsStrip(ui, onClick = { claudeUsageExpanded = !claudeUsageExpanded })
-            } else {
-                StatsStrip(ui)
+            when (ui.mode) {
+                ChatMode.CLAUDE_CODE -> ClaudeCodeStatsStrip(ui, onClick = { claudeUsageExpanded = !claudeUsageExpanded })
+                ChatMode.CODEX -> CodexStatsStrip(ui)
+                // The generic strip's local token estimate is meaningless for either real CLI, which
+                // report their own authoritative numbers.
+                else -> StatsStrip(ui)
             }
         }
         AnimatedVisibility(
@@ -352,6 +388,15 @@ internal fun ChatContent(
                 onInstall = vm::installClaudeCodeRuntime,
                 onSignIn = vm::beginClaudeCodeLogin,
                 onSubmitCode = vm::submitClaudeCodeLoginCode,
+            )
+        }
+
+        if (ui.mode == ChatMode.CODEX && (!ui.codex.installed || !ui.codex.loggedIn || ui.codex.installProgress != null)) {
+            CodexSetupBanner(
+                ui = ui,
+                onInstall = { vm.installCodexRuntime() },
+                onSignIn = vm::beginCodexLogin,
+                onCancelSignIn = vm::cancelCodexLogin,
             )
         }
 
@@ -372,13 +417,15 @@ internal fun ChatContent(
             onSend = vm::send,
             onStop = vm::stop,
             onToggleMode = {
-                vm.setMode(
-                    when (ui.mode) {
-                        ChatMode.CHAT -> ChatMode.BUILD
-                        ChatMode.BUILD -> ChatMode.CLAUDE_CODE
-                        ChatMode.CLAUDE_CODE -> ChatMode.CHAT
-                    },
-                )
+                // Cycling between the two CLI engines goes through switchEngine() rather than setMode()
+                // so an in-progress conversation is carried over with a handoff brief instead of the new
+                // engine starting cold with no idea what came before.
+                when (ui.mode) {
+                    ChatMode.CHAT -> vm.setMode(ChatMode.BUILD)
+                    ChatMode.BUILD -> vm.setMode(ChatMode.CLAUDE_CODE)
+                    ChatMode.CLAUDE_CODE -> vm.switchEngine(ChatMode.CODEX)
+                    ChatMode.CODEX -> vm.setMode(ChatMode.CHAT)
+                }
             },
             modifier = Modifier
                 .padding(horizontal = 12.dp)
@@ -469,6 +516,47 @@ private fun ClaudeCodeStatsStrip(ui: ChatUiState, onClick: () -> Unit) {
             contentDescription = "Show Claude usage",
             tint = Cosmos.TextFaint,
             modifier = Modifier.size(14.dp),
+        )
+    }
+}
+
+/**
+ * Codex's token strip. Shows tokens rather than a dollar figure because Codex reports no cost — see
+ * [com.legion.orion.codex.CodexEventMapper.TurnUsage]. Not clickable: there is no equivalent of Claude's
+ * expandable 5h/7d quota detail to open.
+ */
+@Composable
+private fun CodexStatsStrip(ui: ChatUiState) {
+    val cx = ui.codex
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (ui.busy) {
+            CircularProgressIndicator(
+                Modifier.size(11.dp),
+                color = Cosmos.Violet,
+                strokeWidth = 1.5.dp,
+            )
+        }
+        Text(
+            "codex",
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+            color = Cosmos.TextMuted,
+        )
+        Spacer(Modifier.weight(1f))
+        val cacheSuffix = if (cx.lastTurnCacheReadTokens > 0) {
+            " · cached ${compactTokenCount(cx.lastTurnCacheReadTokens)}"
+        } else {
+            ""
+        }
+        Text(
+            "in ${compactTokenCount(cx.lastTurnInputTokens)} · out ${compactTokenCount(cx.lastTurnOutputTokens)}$cacheSuffix",
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+            color = Cosmos.TextMuted,
         )
     }
 }
@@ -695,6 +783,96 @@ private fun ClaudeCodeSetupBanner(
     }
 }
 
+/**
+ * Codex's provisioning/sign-in banner, the counterpart of [ClaudeCodeSetupBanner].
+ *
+ * The sign-in step is shaped differently from Claude's on purpose, because the flow itself is: Codex uses
+ * a device-code grant, so there is no code to paste BACK — the user opens a URL, types the short code the
+ * banner displays, and the CLI notices on its own. That removes the text field entirely and means the
+ * approval can happen on a completely different device, which is why the code is shown large and
+ * selectable rather than tucked into body text.
+ */
+@Composable
+private fun CodexSetupBanner(
+    ui: ChatUiState,
+    onInstall: () -> Unit,
+    onSignIn: () -> Unit,
+    onCancelSignIn: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cx = ui.codex
+    val context = LocalContext.current
+
+    Column(
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .liquidGlass(shape = Liquid.ShapeSmall, fillTopAlpha = 0.1f)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Set up Codex", style = MaterialTheme.typography.labelLarge, color = Cosmos.Text)
+        when {
+            cx.installProgress != null -> {
+                Text(cx.installProgress, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted)
+            }
+            !cx.installed -> {
+                Text(
+                    if (cx.needsOnlyBinary) {
+                        "Downloads the real Codex CLI into the Linux environment you already have. " +
+                            "About 105MB to download, 257MB on disk. Needs a network connection."
+                    } else {
+                        "Codex shares the same Linux environment as Claude Code — install that first " +
+                            "from the Claude Code setup, then come back here."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
+                if (cx.needsOnlyBinary) {
+                    LiquidButton("Download Codex", onClick = onInstall, compact = true)
+                }
+            }
+            cx.loginUrl != null -> {
+                Text(
+                    "Open this page and enter the code below to link your ChatGPT plan. " +
+                        "You can do this on another device — Codex will pick it up automatically.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
+                cx.loginUserCode?.let { code ->
+                    Text(
+                        code,
+                        style = MaterialTheme.typography.titleMedium.copy(fontFamily = MonoFamily),
+                        color = Cosmos.Violet3,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LiquidButton(
+                        "Open sign-in page",
+                        compact = true,
+                        onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(cx.loginUrl))) } },
+                    )
+                    LiquidButton(
+                        "Cancel",
+                        compact = true,
+                        style = LiquidButtonStyle.Glass,
+                        onClick = onCancelSignIn,
+                    )
+                }
+            }
+            !cx.loggedIn -> {
+                Text(
+                    "Sign in with your ChatGPT Plus, Pro, or Business plan — no separate API billing.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
+                LiquidButton(if (cx.loginBusy) "Starting…" else "Sign in", compact = true, onClick = onSignIn)
+            }
+        }
+        cx.loginError?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Cosmos.Red) }
+    }
+}
+
 @Composable
 private fun EmptyChat(mode: ChatMode) {
     Column(
@@ -733,6 +911,7 @@ private fun EmptyChat(mode: ChatMode) {
             when (mode) {
                 ChatMode.BUILD -> "What should we build?"
                 ChatMode.CLAUDE_CODE -> "What should Claude Code do?"
+                ChatMode.CODEX -> "What should Codex do?"
                 ChatMode.CHAT -> "Ask Orion anything"
             },
             style = MaterialTheme.typography.headlineSmall.copy(brush = Cosmos.TitleGradient),
@@ -743,6 +922,7 @@ private fun EmptyChat(mode: ChatMode) {
             when (mode) {
                 ChatMode.BUILD -> "On-device agent with tools, snapshots and preview"
                 ChatMode.CLAUDE_CODE -> "The real Claude Code CLI, billed to your subscription"
+                ChatMode.CODEX -> "The real Codex CLI, billed to your ChatGPT plan"
                 ChatMode.CHAT -> "Local-first. Your words never have to leave the phone."
             },
             style = MaterialTheme.typography.bodySmall,
@@ -821,7 +1001,9 @@ private fun InputBar(
             Icon(
                 when (ui.mode) {
                     ChatMode.BUILD -> Icons.Outlined.Build
-                    ChatMode.CLAUDE_CODE -> Icons.Outlined.Terminal
+                    // Both CLI engines are terminal-backed; the label beside the icon is what
+                    // distinguishes them, so they intentionally share the glyph.
+                    ChatMode.CLAUDE_CODE, ChatMode.CODEX -> Icons.Outlined.Terminal
                     ChatMode.CHAT -> Icons.Outlined.ChatBubbleOutline
                 },
                 contentDescription = "Mode",
@@ -832,6 +1014,7 @@ private fun InputBar(
                 when (ui.mode) {
                     ChatMode.BUILD -> "Build"
                     ChatMode.CLAUDE_CODE -> "Claude Code"
+                    ChatMode.CODEX -> "Codex"
                     ChatMode.CHAT -> "Chat"
                 },
                 style = MaterialTheme.typography.labelSmall,
@@ -839,10 +1022,11 @@ private fun InputBar(
             )
         }
 
-        if (ui.mode == ChatMode.CLAUDE_CODE) {
+        // Attachments are copied into the shared project sandbox, so they work the same for either CLI.
+        if (ui.mode.isAgentCli) {
             Icon(
                 Icons.Outlined.AttachFile,
-                contentDescription = "Attach files for Claude Code",
+                contentDescription = "Attach files",
                 tint = Cosmos.TextMuted,
                 modifier = Modifier
                     .size(30.dp)
@@ -1343,6 +1527,7 @@ internal fun ClaudeCodeOptionsSheet(
     onSignIn: () -> Unit,
     onSwitchAccount: () -> Unit,
     onLogout: () -> Unit,
+    onSwitchToCodex: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -1422,6 +1607,29 @@ internal fun ClaudeCodeOptionsSheet(
                 cc.accountActionError?.let {
                     Text(it, style = MaterialTheme.typography.labelSmall, color = Cosmos.Red)
                 }
+            }
+
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .liquidGlass(shape = Liquid.ShapeSmall, fillTopAlpha = 0.08f)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text("Continue in Codex", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                Text(
+                    "Hands this conversation to Codex with a summary of what has happened so far — useful " +
+                        "when this account is out of quota. Both engines work on the same project files.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextFaint,
+                )
+                LiquidButton(
+                    "Switch to Codex",
+                    compact = true,
+                    style = LiquidButtonStyle.Glass,
+                    enabled = !ui.busy,
+                    onClick = { onSwitchToCodex(); onDismiss() },
+                )
             }
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1520,6 +1728,214 @@ internal fun ClaudeCodeOptionsSheet(
 }
 
 private enum class ClaudeAccountAction { SWITCH, LOGOUT }
+
+/**
+ * Codex's counterpart of [ClaudeCodeOptionsSheet].
+ *
+ * Also the place the engine handoff is offered from, via [onSwitchToClaude]: switching engines is an
+ * account-level decision (the usual trigger being "this account is out of quota"), so it belongs next to
+ * the account block rather than buried in the mode toggle's cycle.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun CodexOptionsSheet(
+    ui: ChatUiState,
+    onPick: (model: String?, effort: String, sandbox: String) -> Unit,
+    onSignIn: () -> Unit,
+    onLogout: () -> Unit,
+    onReinstall: () -> Unit,
+    onSwitchToClaude: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val cx = ui.codex
+    var confirmLogout by remember { mutableStateOf(false) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xF20A0618),
+        dragHandle = null,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(
+                "Codex options",
+                style = MaterialTheme.typography.titleMedium.copy(brush = Cosmos.TitleGradient),
+                fontWeight = FontWeight.Bold,
+            )
+
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .liquidGlass(shape = Liquid.ShapeSmall, fillTopAlpha = 0.08f)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                Text("Account", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                if (cx.loggedIn) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Icon(Icons.Outlined.Person, null, tint = Cosmos.Violet3, modifier = Modifier.size(18.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                cx.authMethod ?: "Signed in",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Cosmos.Text,
+                            )
+                            cx.installedVersion?.let {
+                                Text(it, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted)
+                            }
+                        }
+                        if (cx.accountActionBusy) {
+                            CircularProgressIndicator(Modifier.size(17.dp), strokeWidth = 1.5.dp, color = Cosmos.Violet)
+                        }
+                    }
+                    LiquidButton(
+                        "Log out",
+                        compact = true,
+                        style = LiquidButtonStyle.Destructive,
+                        enabled = !cx.accountActionBusy && !cx.loginBusy,
+                        onClick = { confirmLogout = true },
+                    )
+                } else {
+                    Text(
+                        if (cx.installed) "No ChatGPT account is signed in on this device."
+                        else "Download the Codex CLI to sign in on this device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Cosmos.TextMuted,
+                    )
+                    LiquidButton(
+                        if (cx.loginBusy) "Starting sign-in…" else "Sign in",
+                        compact = true,
+                        enabled = cx.installed && !cx.loginBusy && !cx.accountActionBusy,
+                        onClick = onSignIn,
+                    )
+                }
+                cx.accountActionError?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = Cosmos.Red)
+                }
+            }
+
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .liquidGlass(shape = Liquid.ShapeSmall, fillTopAlpha = 0.08f)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text("Continue in Claude Code", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                Text(
+                    "Hands this conversation to Claude Code with a summary of what has happened so far. " +
+                        "Both engines work on the same project files, so nothing on disk changes.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextFaint,
+                )
+                LiquidButton(
+                    "Switch to Claude Code",
+                    compact = true,
+                    style = LiquidButtonStyle.Glass,
+                    enabled = !ui.busy,
+                    onClick = { onSwitchToClaude(); onDismiss() },
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Model", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CodexUiState.MODEL_OPTIONS.forEach { model ->
+                        LiquidChip(
+                            text = model ?: "Default",
+                            selected = cx.model == model,
+                            onClick = { onPick(model, cx.effort, cx.sandbox) },
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Effort", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CodexUiState.EFFORT_OPTIONS.forEach { effort ->
+                        LiquidChip(
+                            text = claudeEffortLabel(effort),
+                            selected = cx.effort == effort,
+                            onClick = { onPick(cx.model, effort, cx.sandbox) },
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Sandbox", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    CodexUiState.SANDBOX_OPTIONS.forEach { sandbox ->
+                        LiquidChip(
+                            text = when (sandbox) {
+                                "danger-full-access" -> "Full access"
+                                "workspace-write" -> "Workspace write"
+                                "read-only" -> "Read only"
+                                else -> sandbox
+                            },
+                            selected = cx.sandbox == sandbox,
+                            onClick = { onPick(cx.model, cx.effort, sandbox) },
+                        )
+                    }
+                }
+                Text(
+                    "Full access is the working default on Android: Codex enforces the stricter modes " +
+                        "with Linux kernel features the phone's chroot may not provide, and when they're " +
+                        "missing every command fails. Files stay limited to what Orion itself can reach.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextFaint,
+                )
+            }
+
+            if (cx.installed) {
+                LiquidButton(
+                    "Re-download Codex CLI",
+                    compact = true,
+                    style = LiquidButtonStyle.Glass,
+                    enabled = cx.installProgress == null,
+                    onClick = onReinstall,
+                )
+                cx.installProgress?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+    }
+
+    if (confirmLogout) {
+        AlertDialog(
+            onDismissRequest = { confirmLogout = false },
+            title = { Text("Log out of Codex?") },
+            text = {
+                Text(
+                    "Codex will stop active work and remove this account from Orion. Stored Codex " +
+                        "conversation threads are cleared too, since they belong to this account.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmLogout = false
+                    onLogout()
+                }) {
+                    Text("Log out", color = Cosmos.Red)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Cancel") } },
+        )
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

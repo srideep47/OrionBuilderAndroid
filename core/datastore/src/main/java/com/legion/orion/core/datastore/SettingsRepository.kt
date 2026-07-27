@@ -33,6 +33,9 @@ class SettingsRepository @Inject constructor(
         val CLAUDE_CODE_MODEL = stringPreferencesKey("claude_code_model")
         val CLAUDE_CODE_EFFORT = stringPreferencesKey("claude_code_effort")
         val CLAUDE_CODE_PERMISSION_MODE = stringPreferencesKey("claude_code_permission_mode")
+        val CODEX_MODEL = stringPreferencesKey("codex_model")
+        val CODEX_EFFORT = stringPreferencesKey("codex_effort")
+        val CODEX_SANDBOX = stringPreferencesKey("codex_sandbox")
     }
 
     val lastModelPath: Flow<String?> =
@@ -81,6 +84,27 @@ class SettingsRepository @Inject constructor(
     val claudeCodePermissionMode: Flow<String> =
         context.settingsDataStore.data.map { it[Keys.CLAUDE_CODE_PERMISSION_MODE] ?: "bypassPermissions" }
 
+    /** null = no `-m` flag passed, Codex uses whatever its own config.toml/account default is. */
+    val codexModel: Flow<String?> =
+        context.settingsDataStore.data.map { it[Keys.CODEX_MODEL] }
+
+    /** Passed as `-c model_reasoning_effort=<value>`. Codex names these the same way Claude Code's
+     * `--effort` does, so the two engines' option sheets can stay symmetrical. */
+    val codexEffort: Flow<String> =
+        context.settingsDataStore.data.map { it[Keys.CODEX_EFFORT] ?: "medium" }
+
+    /** `danger-full-access`, not `workspace-write`, and this is not the paranoid choice it sounds like.
+     * Codex enforces `workspace-write` using Landlock + seccomp, kernel features that a proot chroot on
+     * Android cannot be relied on to provide; when they're unavailable the sandbox fails closed and
+     * every command dies. `danger-full-access` skips that enforcement path entirely and leaves file
+     * access governed by the real Android app UID — the same reasoning that makes Claude Code's
+     * `bypassPermissions` the correct default here, and the same reason proot must not pass `-0`.
+     *
+     * The name overstates the exposure in this context: "full access" means full access to what the
+     * Orion app process could already reach on its own, not to the device at large. */
+    val codexSandbox: Flow<String> =
+        context.settingsDataStore.data.map { it[Keys.CODEX_SANDBOX] ?: "danger-full-access" }
+
     suspend fun setLastModel(path: String, backend: String) {
         context.settingsDataStore.edit {
             it[Keys.LAST_MODEL_PATH] = path
@@ -128,6 +152,14 @@ class SettingsRepository @Inject constructor(
             if (model != null) it[Keys.CLAUDE_CODE_MODEL] = model else it.remove(Keys.CLAUDE_CODE_MODEL)
             it[Keys.CLAUDE_CODE_EFFORT] = effort
             it[Keys.CLAUDE_CODE_PERMISSION_MODE] = permissionMode
+        }
+    }
+
+    suspend fun setCodexOptions(model: String?, effort: String, sandbox: String) {
+        context.settingsDataStore.edit {
+            if (model != null) it[Keys.CODEX_MODEL] = model else it.remove(Keys.CODEX_MODEL)
+            it[Keys.CODEX_EFFORT] = effort
+            it[Keys.CODEX_SANDBOX] = sandbox
         }
     }
 }

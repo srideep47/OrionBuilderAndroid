@@ -114,7 +114,13 @@ class ClaudeCodeProcess(
          * detect which port an arbitrary framework's dev server picked. */
         const val PREVIEW_PORT = 8073
 
-        private const val PREVIEW_SYSTEM_PROMPT =
+        /** Shared with Codex (see `codex/CodexProcess.kt`), which injects it via
+         * `-c developer_instructions=…` instead of `--append-system-prompt`. Both engines drive the
+         * exact same `orion-tool` bridge, so the instructions describing it must not fork. */
+        internal val ORION_AGENT_INSTRUCTIONS: String
+            get() = PREVIEW_SYSTEM_PROMPT + " " + GODOT_SYSTEM_PROMPT
+
+        internal const val PREVIEW_SYSTEM_PROMPT =
             "When the user wants to preview a web project on this device, always serve it in the " +
                 "background on port $PREVIEW_PORT (e.g. python3 -m http.server $PREVIEW_PORT for " +
                 "static HTML/CSS/JS, or the project's dev server with its port overridden to " +
@@ -131,7 +137,7 @@ class ClaudeCodeProcess(
                 "/root/project/.orion/device.png. Never claim visual UI verification without actually " +
                 "reading the screenshot and checking the relevant UI state. Run orion-tool help for syntax."
 
-        private const val GODOT_SYSTEM_PROMPT =
+        internal const val GODOT_SYSTEM_PROMPT =
             "This project has an embedded Godot game engine (isolated process, zero footprint when " +
                 "idle) with full AI control via orion-tool. Every orion-tool operation is a Bash/shell " +
                 "command, not a native Claude tool: invoke it directly with Bash and NEVER use ToolSearch " +
@@ -346,12 +352,9 @@ except Exception as e:
     }
 
     private fun ensureOrionIntegrationFiles() {
-        val client = File(toolchain.rootfsDir, "root/.local/bin/orion-tool")
-        client.parentFile?.mkdirs()
-        if (!client.exists() || client.readText() != ORION_TOOL_CLIENT) {
-            client.writeText(ORION_TOOL_CLIENT)
-            client.setExecutable(true, true)
-        }
+        // Shared with the Codex engine — see claudecode/OrionToolRuntime.kt.
+        ensureOrionToolClient(toolchain)
+        // Claude-specific: the status-line + PermissionRequest hook transport has no Codex counterpart.
         val settings = File(toolchain.rootfsDir, "root/.claude/orion-settings.json")
         settings.parentFile?.mkdirs()
         if (!settings.exists() || settings.readText() != ORION_CLAUDE_SETTINGS) {

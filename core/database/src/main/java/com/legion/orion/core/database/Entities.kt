@@ -187,3 +187,21 @@ data class ClaudeCodeSessionEntity(
     val claudeSessionId: String,
     val createdAt: Long,
 )
+
+/** Maps a project to its Codex CLI thread id, the direct counterpart of [ClaudeCodeSessionEntity].
+ *
+ * Kept as a SEPARATE table rather than an `engine` column on the Claude row on purpose: one project
+ * can legitimately hold a live Claude session AND a live Codex thread at the same time (that is what
+ * makes switching engines mid-project and coming back cheap), so these are two independent rows, not
+ * two variants of one.
+ *
+ * Codex's continuation model differs from Claude's: there is no long-lived process to reconnect to —
+ * `codex exec` runs once per turn and continuity comes purely from replaying this id as
+ * `codex exec resume <threadId>`. So this row isn't a crash-recovery aid the way the Claude one is;
+ * it IS the conversation. */
+@Entity(tableName = "codex_sessions")
+data class CodexSessionEntity(
+    @PrimaryKey val projectId: String,
+    val threadId: String,
+    val createdAt: Long,
+)
