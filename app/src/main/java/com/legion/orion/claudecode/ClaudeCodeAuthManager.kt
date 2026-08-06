@@ -139,12 +139,17 @@ class ClaudeCodeAuthManager(private val toolchain: ClaudeCodeToolchain) {
             writer.flush()
         }
 
-        /** Waits (bounded) for the login process to finish, reporting whether it looked successful. */
-        suspend fun awaitResult(timeoutMs: Long = 30_000): Boolean = withContext(Dispatchers.IO) {
+        /** Waits for the browser OAuth flow, reporting whether the CLI completed successfully. */
+        suspend fun awaitResult(timeoutMs: Long = 5 * 60_000): Boolean = withContext(Dispatchers.IO) {
             val finished = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
             val text = synchronized(outputSoFar) { outputSoFar.toString() }
-            finished && (text.contains("Login successful") || text.contains("already logged in", ignoreCase = true))
+            finished && (process.exitValue() == 0 ||
+                text.contains("Login successful", ignoreCase = true) ||
+                text.contains("already logged in", ignoreCase = true))
         }
+
+        /** A concise CLI diagnostic suitable for showing after an OAuth failure. */
+        fun diagnostic(): String = synchronized(outputSoFar) { outputSoFar.toString().trim().takeLast(320) }
 
         fun cancel() {
             runCatching { process.destroy() }

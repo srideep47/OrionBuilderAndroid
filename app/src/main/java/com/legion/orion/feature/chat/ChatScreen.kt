@@ -302,6 +302,7 @@ internal fun ChatContent(
     var claudeUsageExpanded by rememberSaveable { mutableStateOf(true) }
     var followLatest by remember { mutableStateOf(true) }
     val bottomChrome = LocalBottomChromeHeight.current
+    var commandPickerOpen by rememberSaveable { mutableStateOf(false) }
     // The floating nav pill is covered by the keyboard while it's up, so the extra clearance
     // reserved for it becomes dead space between the input bar and the keyboard — only reserve it
     // when the IME is actually hidden. WindowInsets.ime updates live as the keyboard animates in/out.
@@ -388,6 +389,7 @@ internal fun ChatContent(
                 onInstall = vm::installClaudeCodeRuntime,
                 onSignIn = vm::beginClaudeCodeLogin,
                 onSubmitCode = vm::submitClaudeCodeLoginCode,
+                onCancelSignIn = vm::cancelClaudeCodeLogin,
             )
         }
 
@@ -416,22 +418,26 @@ internal fun ChatContent(
             onRemoveAttachment = vm::removeClaudeCodeAttachment,
             onSend = vm::send,
             onStop = vm::stop,
-            onToggleMode = {
-                // Cycling between the two CLI engines goes through switchEngine() rather than setMode()
-                // so an in-progress conversation is carried over with a handoff brief instead of the new
-                // engine starting cold with no idea what came before.
-                when (ui.mode) {
-                    ChatMode.CHAT -> vm.setMode(ChatMode.BUILD)
-                    ChatMode.BUILD -> vm.setMode(ChatMode.CLAUDE_CODE)
-                    ChatMode.CLAUDE_CODE -> vm.switchEngine(ChatMode.CODEX)
-                    ChatMode.CODEX -> vm.setMode(ChatMode.CHAT)
-                }
-            },
+            onToggleMode = { commandPickerOpen = true },
             modifier = Modifier
                 .padding(horizontal = 12.dp)
                 .padding(bottom = if (imeVisible) 4.dp else bottomChrome + 4.dp)
                 .imePadding(),
         )
+
+        if (commandPickerOpen) {
+            CommandPickerSheet(
+                ui = ui,
+                onChoose = { target ->
+                    // Engine-to-engine changes preserve the project and prepare a visible handoff;
+                    // ordinary Chat/Build choices are immediate and never alter the selected model.
+                    if (target.isAgentCli && ui.mode.isAgentCli && target != ui.mode) vm.switchEngine(target)
+                    else vm.setMode(target)
+                    commandPickerOpen = false
+                },
+                onDismiss = { commandPickerOpen = false },
+            )
+        }
     }
 }
 
@@ -711,10 +717,12 @@ private fun ClaudeCodeSetupBanner(
     onInstall: () -> Unit,
     onSignIn: () -> Unit,
     onSubmitCode: (String) -> Unit,
+    onCancelSignIn: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val cc = ui.claudeCode
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
     var pastedCode by remember { mutableStateOf("") }
 
     Column(
@@ -750,6 +758,20 @@ private fun ClaudeCodeSetupBanner(
                     compact = true,
                     onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(cc.loginUrl))) } },
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LiquidButton(
+                        "Copy link",
+                        compact = true,
+                        style = LiquidButtonStyle.Glass,
+                        onClick = { clipboard.setText(AnnotatedString(cc.loginUrl)) },
+                    )
+                    LiquidButton(
+                        "Cancel",
+                        compact = true,
+                        style = LiquidButtonStyle.Glass,
+                        onClick = onCancelSignIn,
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     BasicTextField(
                         value = pastedCode,
@@ -767,7 +789,12 @@ private fun ClaudeCodeSetupBanner(
                             inner()
                         },
                     )
-                    LiquidButton("Submit", compact = true, onClick = { onSubmitCode(pastedCode); pastedCode = "" })
+                    LiquidButton(
+                        "Submit",
+                        compact = true,
+                        enabled = pastedCode.isNotBlank(),
+                        onClick = { onSubmitCode(pastedCode); pastedCode = "" },
+                    )
                 }
             }
             !cc.loggedIn -> {
@@ -951,7 +978,151 @@ private fun SuggestionChips(mode: ChatMode, onPick: (String) -> Unit) {
     }
 }
 
-// ─────────────────────────────── Input bar ───────────────────────────────
+// ─────────────────────────────── Command picker / input bar ───────────────────────────────
+
+/**
+ * Explicit command and engine selector.  This replaces the old tap-to-cycle control: cycling made
+ * it possible to select Claude Code, tap once more while composing, and silently send through the
+ * locally-selected Qwen provider.  Every row here states both the execution engine and its ready
+ * state, so the composer label and the turn runner always agree.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CommandPickerSheet(
+    ui: ChatUiState,
+    onChoose: (ChatMode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xF20A0618),
+        dragHandle = null,
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                "Orion command",
+                style = MaterialTheme.typography.titleMedium.copy(brush = Cosmos.TitleGradient),
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "Choose how this message runs. Agent engines use your signed-in subscription; cloud and local models remain separate.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Cosmos.TextMuted,
+            )
+
+            CommandPickerRow(
+                title = "Auto chat",
+                subtitle = ui.selectedProvider?.let { "Cloud/local model: ${ui.selectedModel ?: it.label}" }
+                    ?: "Choose a configured cloud or local model",
+                mode = ChatMode.CHAT,
+                selected = ui.mode == ChatMode.CHAT,
+                status = "Default",
+                icon = Icons.Outlined.ChatBubbleOutline,
+                onClick = { onChoose(ChatMode.CHAT) },
+            )
+            CommandPickerRow(
+                title = "Orion Builder",
+                subtitle = "Plans and runs Orion build workflows with the selected provider",
+                mode = ChatMode.BUILD,
+                selected = ui.mode == ChatMode.BUILD,
+                status = "Agent",
+                icon = Icons.Outlined.Build,
+                onClick = { onChoose(ChatMode.BUILD) },
+            )
+
+            Text(
+                "Subscription agent engines",
+                style = MaterialTheme.typography.labelMedium,
+                color = Cosmos.Violet3,
+                modifier = Modifier.padding(top = 8.dp, start = 4.dp),
+            )
+            CommandPickerRow(
+                title = "Claude Code",
+                subtitle = when {
+                    !ui.claudeCode.installed -> "Install the on-device Claude Code runtime"
+                    ui.claudeCode.loggedIn -> "${ui.claudeCode.model ?: "Account default"} · ${claudeEffortLabel(ui.claudeCode.effort)} · full tool access"
+                    else -> "Sign in with your Claude Pro, Max, or Team subscription"
+                },
+                mode = ChatMode.CLAUDE_CODE,
+                selected = ui.mode == ChatMode.CLAUDE_CODE,
+                status = if (ui.claudeCode.loggedIn) "Ready" else if (ui.claudeCode.installed) "Sign in" else "Install",
+                icon = Icons.Outlined.Terminal,
+                ready = ui.claudeCode.loggedIn,
+                onClick = { onChoose(ChatMode.CLAUDE_CODE) },
+            )
+            CommandPickerRow(
+                title = "Codex",
+                subtitle = when {
+                    !ui.codex.installed -> "Install the Codex CLI into the shared Linux runtime"
+                    ui.codex.loggedIn -> "${ui.codex.model ?: "Account default"} · ${claudeEffortLabel(ui.codex.effort)}"
+                    else -> "Sign in with your ChatGPT subscription"
+                },
+                mode = ChatMode.CODEX,
+                selected = ui.mode == ChatMode.CODEX,
+                status = if (ui.codex.loggedIn) "Ready" else if (ui.codex.installed) "Sign in" else "Install",
+                icon = Icons.Outlined.Terminal,
+                ready = ui.codex.loggedIn,
+                onClick = { onChoose(ChatMode.CODEX) },
+            )
+
+            if (ui.providers.isNotEmpty()) {
+                Text(
+                    "Configured model sources",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Cosmos.Violet3,
+                    modifier = Modifier.padding(top = 8.dp, start = 4.dp),
+                )
+                ui.providers.take(5).forEach { provider ->
+                    Text(
+                        provider.label,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Cosmos.TextDim,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CommandPickerRow(
+    title: String,
+    subtitle: String,
+    mode: ChatMode,
+    selected: Boolean,
+    status: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    ready: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(Liquid.ShapeSmall)
+            .background(if (selected) Cosmos.Violet.copy(alpha = 0.16f) else Color.Transparent)
+            .border(1.dp, if (selected) Cosmos.Violet.copy(alpha = 0.55f) else Cosmos.Hairline, Liquid.ShapeSmall)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(icon, null, tint = if (selected) Cosmos.Violet3 else Cosmos.TextMuted, modifier = Modifier.size(19.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, color = Cosmos.Text)
+            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(status, style = MaterialTheme.typography.labelSmall, color = if (ready) Cosmos.Green else Cosmos.Violet3)
+            if (selected) Icon(Icons.Outlined.Check, null, tint = Cosmos.Green, modifier = Modifier.size(16.dp))
+        }
+    }
+}
 
 @Composable
 private fun InputBar(

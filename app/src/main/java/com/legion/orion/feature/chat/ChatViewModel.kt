@@ -782,6 +782,22 @@ class ChatViewModel @Inject constructor(
             }
         }.onSuccess { session ->
             claudeCodeLoginSession = session
+            // Some Claude OAuth redirects complete the CLI without asking for a paste-back code.
+            // Watch the process independently so that path actually updates the UI; submitCode only
+            // feeds stdin and this waiter owns the final state transition.
+            viewModelScope.launch {
+                val ok = session.awaitResult()
+                if (claudeCodeLoginSession !== session) return@launch
+                claudeCodeLoginSession = null
+                _ui.value = _ui.value.copy(
+                    claudeCode = _ui.value.claudeCode.copy(
+                        loginBusy = false,
+                        loginUrl = null,
+                        loginError = if (ok) null else session.diagnostic().ifBlank { "Sign-in did not complete; try again." },
+                    ),
+                )
+                if (ok) checkClaudeCodeReadiness()
+            }
         }.onFailure {
             _ui.value = _ui.value.copy(
                 claudeCode = _ui.value.claudeCode.copy(
@@ -869,6 +885,15 @@ class ChatViewModel @Inject constructor(
             )
             if (ok) checkClaudeCodeReadiness()
         }
+    }
+
+    /** Stops an abandoned browser OAuth flow without changing the current account. */
+    fun cancelClaudeCodeLogin() {
+        claudeCodeLoginSession?.cancel()
+        claudeCodeLoginSession = null
+        _ui.value = _ui.value.copy(
+            claudeCode = _ui.value.claudeCode.copy(loginBusy = false, loginUrl = null, loginError = null),
+        )
     }
 
     fun setContentTab(tab: CommandContentTab) {
