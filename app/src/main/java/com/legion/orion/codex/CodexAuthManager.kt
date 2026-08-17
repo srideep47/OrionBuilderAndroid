@@ -1,6 +1,7 @@
 package com.legion.orion.codex
 
 import java.io.BufferedReader
+import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -53,7 +54,19 @@ class CodexAuthManager(private val toolchain: CodexToolchain) {
         environment()["LD_LIBRARY_PATH"] = toolchain.base.libDir.absolutePath
     }
 
+    @Volatile private var cachedStatus: AuthStatus? = null
+    @Volatile private var cachedStatusAt = 0L
+
     suspend fun status(): AuthStatus = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        cachedStatus?.let { if (now - cachedStatusAt < STATUS_TTL_MS) return@withContext it }
+
+        // Device-code login writes auth.json. If that file is absent, a proot+codex probe will
+        // always report signed-out — skip the process spawn on every Code-tab open.
+        if (!File(toolchain.codexHomeOnHost, "auth.json").isFile) {
+            return@withContext AuthStatus(false, null, "").also { cache(it) }
+        }
+
         val proc = ProcessBuilder(baseCommand("$envPrefix codex login status 2>&1"))
             .redirectErrorStream(true)
             .withProotEnv()
@@ -68,7 +81,17 @@ class CodexAuthManager(private val toolchain: CodexToolchain) {
             loggedIn = exitedZero,
             method = parseMethod(output),
             raw = output,
-        )
+        ).also { cache(it) }
+    }
+
+    private fun cache(status: AuthStatus) {
+        cachedStatus = status
+        cachedStatusAt = System.currentTimeMillis()
+    }
+
+    private fun invalidateCache() {
+        cachedStatus = null
+        cachedStatusAt = 0L
     }
 
     private fun parseMethod(output: String): String? = when {
@@ -79,6 +102,7 @@ class CodexAuthManager(private val toolchain: CodexToolchain) {
     }
 
     suspend fun logout() = withContext(Dispatchers.IO) {
+        invalidateCache()
         val proc = ProcessBuilder(baseCommand("$envPrefix codex logout 2>&1"))
             .redirectErrorStream(true)
             .withProotEnv()
@@ -103,6 +127,7 @@ class CodexAuthManager(private val toolchain: CodexToolchain) {
      * abandon it.
      */
     suspend fun beginDeviceLogin(onPrompt: (DevicePrompt) -> Unit): LoginSession = withContext(Dispatchers.IO) {
+        invalidateCache()
         val proc = ProcessBuilder(baseCommand("$envPrefix codex login --device-auth 2>&1"))
             .redirectErrorStream(true)
             .withProotEnv()
@@ -177,5 +202,9 @@ class CodexAuthManager(private val toolchain: CodexToolchain) {
              * missing code is not fatal — many flows embed it in the URL instead. */
             val CODE_REGEX = Regex("\\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\\b")
         }
+    }
+
+    private companion object {
+        const val STATUS_TTL_MS = 45_000L
     }
 }

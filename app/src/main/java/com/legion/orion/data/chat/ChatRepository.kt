@@ -10,7 +10,12 @@ import com.legion.orion.core.database.MessagePartEntity
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -126,24 +131,31 @@ class ChatRepository @Inject constructor(
     }
 
     suspend fun deleteChat(id: String) {
+        messageDao.deletePartsForChat(id)
+        ftsDao.deleteForChat(id)
         messageDao.deleteForChat(id)
         chatDao.delete(id)
     }
 
     /** Observes stored messages (with parts) for a chat, oldest first. */
+    @OptIn(ExperimentalCoroutinesApi::class)
     fun observeMessages(chatId: String): Flow<List<UiMessage>> =
-        messageDao.observeForChat(chatId).map { rows ->
-            rows.map { msg ->
-                val parts = messageDao.partsFor(msg.id).map { p ->
-                    if (p.type == PartType.TOOL_CALL) {
-                        UiPart(p.type, "", runCatching { json.decodeFromString<ToolView>(p.json) }.getOrNull())
-                    } else {
-                        decode(p.json).let { payload -> UiPart(p.type, payload.text, attachments = payload.attachments) }
+        messageDao.observeForChat(chatId).flatMapLatest { rows ->
+            if (rows.isEmpty()) flowOf(emptyList())
+            else messageDao.observeParts(rows.map { it.id }).map { parts ->
+                val byMsg = parts.groupBy { it.messageId }
+                rows.map { msg ->
+                    val decoded = byMsg[msg.id].orEmpty().map { p ->
+                        if (p.type == PartType.TOOL_CALL) {
+                            UiPart(p.type, "", runCatching { json.decodeFromString<ToolView>(p.json) }.getOrNull())
+                        } else {
+                            decode(p.json).let { payload -> UiPart(p.type, payload.text, attachments = payload.attachments) }
+                        }
                     }
+                    UiMessage(msg.id, msg.role, msg.status, decoded, msg.createdAt)
                 }
-                UiMessage(msg.id, msg.role, msg.status, parts, msg.createdAt)
             }
-        }
+        }.flowOn(Dispatchers.IO)
 
     /** Persists a completed user message (single text part) and indexes it. */
     suspend fun addUserMessage(chatId: String, text: String, attachments: List<ChatAttachment> = emptyList()): String {

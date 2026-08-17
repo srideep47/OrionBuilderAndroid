@@ -33,10 +33,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -64,6 +65,7 @@ import com.legion.orion.feature.code.CodeScreen
 import com.legion.orion.feature.hub.HubScreen
 import com.legion.orion.feature.models.ModelsScreen
 import com.legion.orion.feature.settings.SettingsScreen
+import com.legion.orion.marta.MartaScreen
 import com.legion.orion.runtime.RuntimeBootstrap
 import dagger.hilt.android.EntryPointAccessors
 import dev.chrisbanes.haze.HazeState
@@ -75,14 +77,6 @@ fun OrionApp() {
     val backStack by navController.currentBackStackEntryAsState()
     val currentDest = backStack?.destination
     val hazeState = remember { HazeState() }
-    val context = LocalContext.current
-    val bootstrap = remember {
-        EntryPointAccessors.fromApplication(
-            context.applicationContext,
-            OrionApplication.BridgeEntryPoint::class.java,
-        ).runtimeBootstrap()
-    }
-    val boot by bootstrap.state.collectAsState()
 
     // Floating bar: icon + persistent label, bottom margin, and breathing room.
     val navBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
@@ -97,16 +91,19 @@ fun OrionApp() {
 
             NavHost(
                 navController = navController,
-                startDestination = TopDestination.CODE.route,
+                startDestination = TopDestination.MARTA.route,
                 modifier = Modifier
                     .fillMaxSize()
                     .hazeSource(hazeState),
             ) {
+                composable(TopDestination.MARTA.route) { MartaScreen() }
                 composable(TopDestination.CODE.route) { CodeScreen() }
                 composable(TopDestination.MODELS.route) { ModelsScreen() }
                 composable(TopDestination.HUB.route) { HubScreen() }
                 composable(TopDestination.SETTINGS.route) { SettingsScreen() }
             }
+
+            MartaNavEffect(navController)
 
             LiquidTabBar(
                 current = currentDest,
@@ -125,11 +122,43 @@ fun OrionApp() {
                     .padding(bottom = 14.dp),
             )
 
-            // Full-screen first-run setup — auto, no Install buttons. Dismisses when Ready.
-            if (boot.busy || (boot.phase == RuntimeBootstrap.Phase.Failed && !boot.linuxReady)) {
-                RuntimeBootstrapOverlay(boot)
+            RuntimeBootstrapHost()
+        }
+    }
+}
+
+@Composable
+private fun MartaNavEffect(navController: androidx.navigation.NavHostController) {
+    val context = LocalContext.current
+    val navigator = remember {
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            OrionApplication.BridgeEntryPoint::class.java,
+        ).martaNavigator()
+    }
+    LaunchedEffect(navigator) {
+        navigator.routes.collect { route ->
+            navController.navigate(route) {
+                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                launchSingleTop = true
+                restoreState = true
             }
         }
+    }
+}
+
+@Composable
+private fun RuntimeBootstrapHost() {
+    val context = LocalContext.current
+    val bootstrap = remember {
+        EntryPointAccessors.fromApplication(
+            context.applicationContext,
+            OrionApplication.BridgeEntryPoint::class.java,
+        ).runtimeBootstrap()
+    }
+    val boot by bootstrap.state.collectAsStateWithLifecycle()
+    if (boot.busy || (boot.phase == RuntimeBootstrap.Phase.Failed && !boot.linuxReady)) {
+        RuntimeBootstrapOverlay(boot)
     }
 }
 

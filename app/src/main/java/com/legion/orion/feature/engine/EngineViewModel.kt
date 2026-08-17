@@ -30,18 +30,21 @@ import kotlinx.coroutines.launch
 
 /** User-tunable MNN engine settings surfaced in the Engine cockpit. */
 data class EngineSettings(
-    val threadNum: Int = 4,
+    // Snapdragon 8 Elite (SM8750 / Hexagon v79): 2 Prime + 6 Performance.
+    // MNN 3.6.1 benches on this SoC: OpenCL wins prefill, CPU still wins decode.
+    // mmap + int8 Q/K/V keeps a 4B W4 model under ~3GB RSS on a 12GB phone.
+    val threadNum: Int = 6,
     val precision: String = "low",       // low | normal | high
     val memory: String = "low",          // low | normal | high
     val power: String = "high",          // low | normal | high — GPTee tuned default
-    val useMmap: Boolean = false,
+    val useMmap: Boolean = true,
     val useCachedMmap: Boolean = true,
     val kvCacheMmap: Boolean = false,
-    val reuseKv: Boolean = false,
-    val attentionMode: Int = 8,          // 8 off/default, 9 int8 Q/K, 10 int8 Q/K/V
+    val reuseKv: Boolean = true,
+    val attentionMode: Int = 10,         // 8 off/default, 9 int8 Q/K, 10 int8 Q/K/V
     val dynamicOption: Int = 0,
-    val maxAllTokens: Int = 8192,
-    val maxNewTokens: Int = 2048,
+    val maxAllTokens: Int = 4096,
+    val maxNewTokens: Int = 1024,
     val temperature: Float = 0.6f,
     val topP: Float = 0.95f,
     val topK: Int = 20,
@@ -57,7 +60,7 @@ data class EngineSettings(
 
 data class EngineUiState(
     val modelDir: String = "",
-    val backend: MnnBackend = MnnBackend.CPU,
+    val backend: MnnBackend = MnnBackend.OPENCL,
     val prompt: String = "Explain what a tensor is in one sentence.",
     val output: String = "",
     val tokenCount: Int = 0,

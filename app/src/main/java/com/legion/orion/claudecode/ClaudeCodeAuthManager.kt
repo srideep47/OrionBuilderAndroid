@@ -1,6 +1,7 @@
 package com.legion.orion.claudecode
 
 import java.io.BufferedReader
+import java.io.File
 import java.io.Writer
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
@@ -46,14 +47,43 @@ class ClaudeCodeAuthManager(private val toolchain: ClaudeCodeToolchain) {
     private val envPrefix =
         "export PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export HOME=/root; "
 
+    @Volatile private var cachedStatus: AuthStatus? = null
+    @Volatile private var cachedStatusAt = 0L
+
     suspend fun status(): AuthStatus = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        cachedStatus?.let { if (now - cachedStatusAt < STATUS_TTL_MS) return@withContext it }
+
+        // No credentials on disk → not signed in. Spawning proot+claude here is wasted on every
+        // Code-tab open when the user has never logged in (the common first-run path).
+        if (!hasLocalCredentials()) {
+            return@withContext AuthStatus(false, null, null, "").also { cache(it) }
+        }
+
         val proc = ProcessBuilder(baseCommand("$envPrefix claude auth status 2>&1"))
             .redirectErrorStream(true)
             .withProotEnv()
             .start()
         val output = proc.inputStream.bufferedReader().readText()
         proc.waitFor(30, TimeUnit.SECONDS)
-        parseStatus(output)
+        parseStatus(output).also { cache(it) }
+    }
+
+    private fun hasLocalCredentials(): Boolean {
+        val claudeHome = File(toolchain.rootfsDir, "root/.claude")
+        return File(claudeHome, ".credentials.json").isFile ||
+            File(claudeHome, "credentials.json").isFile ||
+            File(toolchain.rootfsDir, "root/.claude.json").isFile
+    }
+
+    private fun cache(status: AuthStatus) {
+        cachedStatus = status
+        cachedStatusAt = System.currentTimeMillis()
+    }
+
+    private fun invalidateCache() {
+        cachedStatus = null
+        cachedStatusAt = 0L
     }
 
     /**
@@ -73,6 +103,7 @@ class ClaudeCodeAuthManager(private val toolchain: ClaudeCodeToolchain) {
         check(proc.exitValue() == 0) {
             output.lineSequence().lastOrNull()?.take(240) ?: "Claude Code sign-out failed"
         }
+        invalidateCache()
         val status = status()
         check(!status.loggedIn) { "Claude Code still reports an active account after sign-out" }
     }
@@ -91,6 +122,7 @@ class ClaudeCodeAuthManager(private val toolchain: ClaudeCodeToolchain) {
      * shows (if any — some flows complete without one), then [LoginSession.awaitResult].
      */
     suspend fun beginLogin(onUrl: (String) -> Unit): LoginSession = withContext(Dispatchers.IO) {
+        invalidateCache()
         val proc = ProcessBuilder(baseCommand("$envPrefix claude auth login --claudeai"))
             .redirectErrorStream(true)
             .withProotEnv()
@@ -154,5 +186,9 @@ class ClaudeCodeAuthManager(private val toolchain: ClaudeCodeToolchain) {
         fun cancel() {
             runCatching { process.destroy() }
         }
+    }
+
+    private companion object {
+        const val STATUS_TTL_MS = 45_000L
     }
 }

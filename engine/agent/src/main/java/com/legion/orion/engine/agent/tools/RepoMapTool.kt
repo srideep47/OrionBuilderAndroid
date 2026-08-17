@@ -6,6 +6,8 @@ import com.legion.orion.engine.agent.ToolResult
 import java.io.File
 import kotlinx.serialization.json.JsonObject
 
+private val SKIP_WALK_DIRS = setOf("node_modules", ".git", ".orion", "build", ".gradle", "dist")
+
 /**
  * Compact project map: lists code files with their top-level symbols (lightweight regex extraction
  * for Kotlin / TS / JS / Python). A tree-sitter-backed version replaces this in a later phase.
@@ -28,9 +30,8 @@ class RepoMapTool : AgentTool {
         val sb = StringBuilder()
         var fileCount = 0
         ctx.projectDir.walkTopDown()
+            .onEnter { it == ctx.projectDir || it.name !in SKIP_WALK_DIRS }
             .filter { it.isFile && it.extension.lowercase() in codeExt && it.length() < 500_000 }
-            .filterNot { it.path.contains("${File.separator}node_modules${File.separator}") }
-            .filterNot { it.path.contains("${File.separator}.git${File.separator}") }
             .sortedBy { it.path }
             .take(200)
             .forEach { file ->

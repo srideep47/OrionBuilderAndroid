@@ -56,6 +56,12 @@ class NodeController @Inject constructor(
         AssetExtractor.extractOnce(context, "node", nodeDir, version = ASSET_VERSION)
     }
 
+    /** True when the last extract stamp matches [ASSET_VERSION] — no AssetManager walk. */
+    fun assetsReady(): Boolean {
+        val marker = File(nodeDir, ".extracted")
+        return marker.isFile && runCatching { marker.readText() }.getOrNull() == ASSET_VERSION
+    }
+
     /** Extracts assets, launches the :node service, and waits for the host to report healthy. */
     suspend fun ensureStarted(): Boolean = startMutex.withLock {
         if (started && health()) return@withLock true

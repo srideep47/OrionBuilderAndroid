@@ -72,13 +72,16 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
+import android.os.SystemClock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -1141,12 +1144,17 @@ private fun EmptyChat(mode: ChatMode) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        val pulse = rememberInfiniteTransition(label = "pulse")
-        val glow by pulse.animateFloat(
-            0.5f, 1f,
-            infiniteRepeatable(tween(2400), RepeatMode.Reverse),
-            label = "glow",
-        )
+        var glow by remember { mutableFloatStateOf(0.75f) }
+        LaunchedEffect(Unit) {
+            // Same 2.4s reverse pulse as before, sampled at ~12 fps instead of every vsync.
+            val periodMs = 2400f
+            val start = SystemClock.uptimeMillis()
+            while (true) {
+                delay(80L)
+                val t = ((SystemClock.uptimeMillis() - start) % (periodMs * 2)) / periodMs
+                glow = if (t <= 1f) 0.5f + 0.5f * t else 1.5f - 0.5f * t
+            }
+        }
         Box(
             Modifier
                 .size(72.dp)

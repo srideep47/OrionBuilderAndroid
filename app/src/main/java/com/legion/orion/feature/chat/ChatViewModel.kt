@@ -58,6 +58,7 @@ import com.legion.orion.engine.providers.ChatRequest
 import com.legion.orion.engine.providers.StreamEvent
 import com.legion.orion.inference.EngineState
 import com.legion.orion.inference.InferenceController
+import com.legion.orion.marta.HandoffBus
 import com.legion.orion.infra.git.GitSnapshotter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -352,6 +353,7 @@ class ChatViewModel @Inject constructor(
     private val devServerState: com.legion.orion.runtime.DevServerState,
     private val claudeToolBridge: ClaudeToolBridge,
     private val runtimeBootstrap: com.legion.orion.runtime.RuntimeBootstrap,
+    private val handoff: HandoffBus,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(ChatUiState())
@@ -428,7 +430,7 @@ class ChatViewModel @Inject constructor(
             val model = selectedModel ?: chosen?.let { providerRepo.modelsFor(it.id).firstOrNull()?.modelId } ?: ""
             _ui.value = _ui.value.copy(providers = providers, selectedProvider = chosen, selectedModel = model)
 
-            val recent = chatRepo.observeChats().first().firstOrNull()
+            val recent = chatRepo.observeChats().first().firstOrNull { it.mode != "marta" }
             if (recent != null) {
                 chatIdFlow.value = recent.id
                 projectId = recent.projectId
@@ -451,6 +453,23 @@ class ChatViewModel @Inject constructor(
             checkClaudeCodeReadiness()
             checkCodexReadiness()
             checkGrokReadiness()
+        }
+
+        viewModelScope.launch {
+            handoff.pending.collect { pending ->
+                val job = pending ?: return@collect
+                val taken = handoff.consume() ?: return@collect
+                val mode = when (taken.brain) {
+                    "claude" -> ChatMode.CLAUDE_CODE
+                    "grok" -> ChatMode.GROK
+                    "codex" -> ChatMode.CODEX
+                    "build" -> ChatMode.BUILD
+                    else -> return@collect
+                }
+                if (_ui.value.mode != mode) switchEngine(mode)
+                _ui.value = _ui.value.copy(input = taken.brief, notice = "Marta handed this to ${taken.brain}")
+                send()
+            }
         }
 
         // Mirror automatic RuntimeBootstrap progress into the mode banners (no Install tap needed).

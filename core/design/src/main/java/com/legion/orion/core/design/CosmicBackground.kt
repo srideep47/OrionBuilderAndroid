@@ -1,31 +1,35 @@
 package com.legion.orion.core.design
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import kotlin.math.sin
 import kotlin.random.Random
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 private data class Star(val x: Float, val y: Float, val r: Float, val phase: Float, val twinkle: Float)
 
 /**
- * Animated deep-space backdrop — nebula swirl + twinkling starfield + drifting
- * grid. Mirrors the desktop `.cosmos` layer. Drawn once on a Canvas behind the
- * whole app; cheap enough for 120 Hz (a handful of radial gradients + points).
+ * Animated deep-space backdrop — nebula + twinkling starfield.
+ *
+ * The nebula is a static Canvas (no snapshot state), so Compose draws it once and keeps the layer.
+ * Stars twinkle at ~12 fps only while the Activity is RESUMED. Visually the same 7s period as
+ * before; the old 60s nebula swirl was ±3% of the screen and is not perceptible against the stars.
  */
 @Composable
 fun CosmicBackground(modifier: Modifier = Modifier) {
@@ -42,49 +46,40 @@ fun CosmicBackground(modifier: Modifier = Modifier) {
         }
     }
 
-    val transition = rememberInfiniteTransition(label = "cosmos")
-    val swirl by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(60_000, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "swirl",
-    )
-    val twinkleT by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 6.28f,
-        animationSpec = infiniteRepeatable(tween(7000, easing = LinearEasing)),
-        label = "twinkle",
-    )
+    var twinkleT by remember { mutableFloatStateOf(0f) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (isActive) {
+                delay(80L)
+                val next = twinkleT + (0.080f / 7f) * 6.28f
+                twinkleT = if (next > 6.28f) next - 6.28f else next
+            }
+        }
+    }
 
     Box(modifier.fillMaxSize().background(Cosmos.Bg)) {
         Canvas(Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
-            val dx = (swirl - 0.5f) * 0.06f * w
-            val dy = (swirl - 0.5f) * 0.05f * h
-
-            // Nebula clouds (radial gradients).
             drawRect(
                 Brush.radialGradient(
                     colors = listOf(Color(0x59A878FF), Color.Transparent),
-                    center = Offset(w * 0.22f + dx, h * 0.28f + dy),
+                    center = Offset(w * 0.22f, h * 0.28f),
                     radius = w * 0.6f,
                 ),
             )
             drawRect(
                 Brush.radialGradient(
                     colors = listOf(Color(0x475A8CFF), Color.Transparent),
-                    center = Offset(w * 0.80f - dx, h * 0.72f - dy),
+                    center = Offset(w * 0.80f, h * 0.72f),
                     radius = w * 0.65f,
                 ),
             )
             drawRect(
                 Brush.radialGradient(
                     colors = listOf(Color(0x2EFFAAD2), Color.Transparent),
-                    center = Offset(w * 0.52f, h * 0.5f + dy),
+                    center = Offset(w * 0.52f, h * 0.5f),
                     radius = w * 0.7f,
                 ),
             )
@@ -95,8 +90,10 @@ fun CosmicBackground(modifier: Modifier = Modifier) {
                     radius = w * 0.45f,
                 ),
             )
-
-            // Starfield with gentle twinkle.
+        }
+        Canvas(Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
             stars.forEach { s ->
                 val a = (0.35f + 0.5f * (0.5f + 0.5f * sin(twinkleT + s.phase)) * s.twinkle).coerceIn(0f, 1f)
                 drawCircle(

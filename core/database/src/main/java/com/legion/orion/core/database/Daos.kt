@@ -60,6 +60,9 @@ interface MessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertPart(part: MessagePartEntity)
 
+    @Query("DELETE FROM message_parts WHERE messageId IN (SELECT id FROM messages WHERE chatId = :chatId)")
+    suspend fun deletePartsForChat(chatId: String)
+
     @Query("DELETE FROM messages WHERE chatId = :chatId")
     suspend fun deleteForChat(chatId: String)
 }
@@ -173,6 +176,9 @@ interface ChatFtsDao {
 
     @Query("SELECT messageId FROM chat_fts WHERE chat_fts MATCH :query")
     suspend fun search(query: String): List<String>
+
+    @Query("DELETE FROM chat_fts WHERE messageId IN (SELECT id FROM messages WHERE chatId = :chatId)")
+    suspend fun deleteForChat(chatId: String)
 }
 
 @Dao

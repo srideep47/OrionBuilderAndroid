@@ -9,6 +9,8 @@ import kotlinx.serialization.json.jsonPrimitive
 
 private fun JsonObject.str(key: String): String? = this[key]?.jsonPrimitive?.contentOrNull
 
+private val SKIP_WALK_DIRS = setOf("node_modules", ".git", ".orion", "build", ".gradle", "dist")
+
 /** Reads a UTF-8 text file inside the project. */
 class ReadFileTool : AgentTool {
     override val name = "read_file"
@@ -81,9 +83,8 @@ class ListFilesTool : AgentTool {
         if (!dir.exists()) return ToolResult("Not found: $sub", isError = true)
         val base = ctx.projectDir.canonicalFile
         val entries = dir.walkTopDown()
+            .onEnter { it == dir || it.name !in SKIP_WALK_DIRS }
             .filter { it.isFile }
-            .filterNot { it.path.contains("${java.io.File.separator}node_modules${java.io.File.separator}") }
-            .filterNot { it.path.contains("${java.io.File.separator}.git${java.io.File.separator}") }
             .map { it.canonicalFile.relativeTo(base).path.replace('\\', '/') }
             .sorted()
             .take(500)

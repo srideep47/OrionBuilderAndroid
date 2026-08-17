@@ -157,10 +157,8 @@ class EditorViewModel @Inject constructor(
 
     private fun listFiles(dir: File): List<String> =
         dir.walkTopDown()
+            .onEnter { it == dir || it.name !in SKIP_WALK_DIRS }
             .filter { it.isFile }
-            .filterNot { it.path.contains("${File.separator}node_modules${File.separator}") }
-            .filterNot { it.path.contains("${File.separator}.git${File.separator}") }
-            .filterNot { it.path.contains("${File.separator}.orion${File.separator}") }
             .filterNot { it.name.startsWith(".orion-save-") }
             .map { it.relativeTo(dir).path.replace('\\', '/') }
             .sorted()
@@ -438,6 +436,7 @@ class EditorViewModel @Inject constructor(
 
     companion object {
         private const val MAX_PROJECT_FILES = 5_000
+        private val SKIP_WALK_DIRS = setOf("node_modules", ".git", ".orion", "build", ".gradle", "dist")
         private const val MAX_EDITABLE_BYTES = 8L * 1024 * 1024
         private const val AUTO_SAVE_DELAY_MS = 1_200L
 

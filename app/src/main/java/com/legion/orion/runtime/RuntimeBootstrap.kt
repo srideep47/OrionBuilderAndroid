@@ -96,6 +96,13 @@ class RuntimeBootstrap @Inject constructor(
             return@withLock current
         }
 
+        // Cold start after a successful first provision: sentinels on disk are enough.
+        // Do not flip to Running (overlay + FGS) or hit GitHub/npm just to confirm versions.
+        snapshotIfAlreadyProvisioned()?.let { ready ->
+            _state.value = ready
+            return@withLock ready
+        }
+
         val errors = mutableListOf<String>()
         emit(
             phase = Phase.Running,
@@ -247,6 +254,29 @@ class RuntimeBootstrap @Inject constructor(
             DevelopmentWorkService.release(context, JOB_ID)
         }
         _state.value
+    }
+
+    private fun snapshotIfAlreadyProvisioned(): State? {
+        val claude = claudeToolchain.status()
+        if (!isLinuxBaseReady(claude) || !claude.provisioned) return null
+        val codex = codexToolchain.status()
+        val grok = grokToolchain.status()
+        if (!codex.provisioned || !grok.provisioned) return null
+        val build = apkBuilder.toolchainStatus()
+        if (!build.provisioned) return null
+        if (!node.assetsReady()) return null
+        return State(
+            phase = Phase.Ready,
+            message = "All runtimes ready",
+            detail = "Claude, Codex, Grok, build tools, Node",
+            linuxReady = true,
+            claudeReady = true,
+            codexReady = true,
+            grokReady = true,
+            buildToolsReady = true,
+            nodeReady = true,
+            finishedPass = true,
+        )
     }
 
     private fun isLinuxBaseReady(status: ClaudeCodeToolchain.Status): Boolean {

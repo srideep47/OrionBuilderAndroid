@@ -3,6 +3,7 @@ package com.legion.orion
 import android.app.Application
 import com.alibaba.mls.api.ApplicationProvider
 import com.legion.orion.claudecode.ClaudeToolBridge
+import com.legion.orion.marta.MartaNavigator
 import com.legion.orion.runtime.RuntimeBootstrap
 import com.legion.orion.server.OrionServerBridge
 import com.localai.api.openai.di.ServiceLocator
@@ -21,6 +22,7 @@ class OrionApplication : Application() {
         fun serverBridge(): OrionServerBridge
         fun claudeToolBridge(): ClaudeToolBridge
         fun runtimeBootstrap(): RuntimeBootstrap
+        fun martaNavigator(): MartaNavigator
     }
 
     override fun onCreate() {

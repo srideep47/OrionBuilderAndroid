@@ -125,12 +125,26 @@ class ModelsViewModel @Inject constructor(
         viewModelScope.launch {
             _ui.value = _ui.value.copy(loadingModelId = model.id)
             InferenceService.start(getApplication())
-            val backend = MnnBackend.entries.firstOrNull { it.configValue == model.lastUsedBackend } ?: MnnBackend.CPU
-            // GPTee tuned profile so quick-loads get full performance, not MNN defaults.
+            val backend = MnnBackend.entries.firstOrNull { it.configValue == model.lastUsedBackend }
+                ?: MnnBackend.OPENCL
+            // Snapdragon 8 Elite profile (MNN 3.6.1): OpenCL prefill, mmap weights, int8 QKV,
+            // 6 threads, reused KV. Same knobs as EngineSettings defaults.
             val tuned = com.legion.orion.engine.mnn.MnnSettings(
+                threadNum = 6,
+                precision = "low",
                 memory = "low",
                 power = "high",
+                useMmap = true,
                 useCachedMmap = true,
+                reuseKv = true,
+                attentionMode = 10,
+                maxAllTokens = 4096,
+                maxNewTokens = 1024,
+                temperature = 0.6f,
+                topP = 0.95f,
+                topK = 20,
+                samplerType = "mixed",
+                enableThinking = true,
             )
             runCatching { controller.load(model.localPath, backend, tuned) }
                 .onSuccess { settings.setLastModel(model.localPath, backend.configValue) }

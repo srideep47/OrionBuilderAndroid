@@ -1,0 +1,258 @@
+#ORION/MARTA/XFER v1 enc=utf8 lossless=1 consumer=any-frontier-model producer=grok-4.6 session=Orion-Marta-2026-08-17
+#PURPOSE: continue THIS thread on another PC with ZERO missing decisions/facts/rules. Do not re-ask settled questions. Execute remaining work.
+#HUMAN_OWNER: srideepalla <srideep@flashback.inc> github=srideep47 repo=https://github.com/srideep47/OrionBuilderAndroid.git
+#DO_NOT: invent git author; never commit as AI; never commit model weights; never click-drive Orion UI via accessibility; never use Qwen3.5-4B as always-on Marta.
+
+@META{
+date=2026-08-17
+tz=Asia/Kolkata
+workspace_pc_a=F:\Orion
+git_root=F:\Orion\OrionAndroid
+parent_F_Orion_NOT_git=1
+os=windows powershell
+pkg=com.legion.orion.debug
+appId=com.legion.orion
+minSdk=29 targetSdk=28(W^X exec toolchain)
+abi=arm64-v8a
+branch=main
+base=47446df ahead_of_origin/main=2_before_this_commit
+backup_branch=backup/local-wip-before-pull@aaa6080
+stopped=before_marta_text_voice_smoke_test
+}
+
+@DEVICE{
+name=Honor Magic7 Pro
+model=PTP_N49 product=PTP-N49 device=HNPTPX
+serial=AXUG025411000804
+soc=SM8750 Snapdragon_8_Elite
+gpu=Adreno_830 npu=Hexagon_v79
+android=16
+ram=11503124kB≈11.8GB
+usb_vidpid=VID_339B&PID_107D ADB_MI=MI_02
+adb_guid_required={F72FE0D4-CBCB-407d-8814-9ED673D0DD6B}
+adb_reg=HKLM\SYSTEM\CurrentControlSet\Enum\USB\VID_339B&PID_107D&MI_02\...\Device Parameters\DeviceInterfaceGUID
+symptom=adb devices empty while PnP shows ADB Interface OK/Unknown
+fix=write GUID + disable/enable USB + adb kill-server/start-server
+note=ADB drops under heavy USB load (model push/gen); rebind if empty
+other_usb=VID_22D9 Honor Play leftover ignore
+}
+
+@PRODUCT_GOAL{
+Marta=on-device Jarvis for Orion ONLY
+surface=SINGLE home screen (voice primary, text same person)
+control=first-party AppControl APIs NEVER tap-our-own-Compose
+jobs=[1 instant talk][2 run/monitor Orion via tools]
+NOT_jobs=write large apps, long CoT, 128k dump
+second_brain=claude|grok|codex|build|peer via handoff_to_brain
+internet=web_search,web_fetch,web_download already exist
+voice=call-like half-duplex+barge-in; true full-duplex NOT this phase
+}
+
+@SETTLED_DECISIONS{
+D01 keep remote-good over older local on git pull; merge unique local Grok/internet/bootstrap + remote chat UI + Claude auth; add Grok row to command picker
+D02 efficiency work inner-only; UI/UX unchanged; CosmicBackground static nebula + 12fps stars pause when !RESUMED; ChatScreen empty-pulse 12fps; auth file-skip+45s cache; RuntimeBootstrap snapshotIfAlreadyProvisioned; NodeController.assetsReady; editor/file/grep/repomap skip node_modules/.git; ChatRepository one-query parts + delete parts/FTS; idle CPU 89%→~7%
+D03 local inference MNN-only
+D04 best official sub-4GB MNN on 8 Elite was Qwen3.5-4B HQQ W4 block64 (~2.46–2.63GB) for quality benches; 9B over cap; Qwen3.6 only large
+D05 vision ON for 4B: is_visual=true + visual.mnn + visual.mnn.weight
+D06 8 Elite knobs: threadNum=6 precision=low memory=low power=high use_mmap=1 use_cached_mmap=1 reuse_kv=1 attention_mode=10(int8 QKV) temp=0.6 sampler=mixed thinking=ON for 4B quality bench
+D07 after bake-off: CPU wins THIS vendored MNN+4B; OpenCL decode 4.7× slower; QNN crashes
+D08 Marta main brain = Qwen3.5-2B-MNN vision+tools NOT 4B (4B=optional local specialist/second brain)
+D09 Marta thinking=OFF always; short replies; CPU backend; mmap+int8QKV; 6 threads
+D10 Marta does NOT click Orion UI; accessibility tools remain for OTHER apps only
+D11 voice v1 = Android SpeechRecognizer(offline prefer)+device neural TTS+16kHz AudioRecord energy VAD barge-in+AEC/NS/AGC; call starts ONLY on orb tap; hangup orb; auto-listen after TTS
+D12 true full-duplex (Moshi/GPT-4o-AV) NOT claimed; Omni-3B later; 2B+ASR/TTS now
+D13 handoff brains: claude→ChatMode.CLAUDE_CODE grok→GROK codex→CODEX build→BUILD
+D14 do not swap libMNN.so blindly to 3.6.1; ABI/JNI risk; needs headers+rebuild orionmnn
+D15 do not commit model weights/bench/tombstones
+D16 git author must be user srideepalla <srideep@flashback.inc> never AI
+D17 user asked stop mid smoke-test; resume from smoke-test then optional MNN 3.6.1
+}
+
+@RULES_HARD{
+R1 no UI-control of Orion via uiautomator/accessibility for product behavior (tests may dump UI)
+R2 Marta inferred only for talk + house-running
+R3 4B not always-on receptionist
+R4 thinking off on Marta
+R5 CPU default after measured bake-off
+R6 QNN not usable on official 4B pack (not AOT; missing libQnnHtpPrepare.so; missing visual_qnn_69_v79.mnn)
+R7 keep reasonable free RAM; mmap required
+R8 no placeholders in agent file writes (existing Orion rule)
+R9 internet via InternetManager tools; never invent live facts
+R10 second brain does software/planning
+R11 RECORD_AUDIO runtime permission; no listen when not in call
+R12 when in call and user speaks during TTS: cancel TTS+generate immediately
+}
+
+@SESSION_ARC{
+1 git: F:\Orion not repo; work in OrionAndroid; pull origin/main; merge keep remote good + unique local; main=47446df ahead 2; backup=aaa6080
+2 run on phone Honor Magic7 Pro
+3 visual walk all screens; profile; optimize idle without UX change
+4 run MNN on-device; check latest MNN github; pick best <4GB; test
+5 enable vision; push visual files; bench CPU/OpenCL/QNN with 8 Elite configs
+6 ADB died often; GUID rebind
+7 user: Marta single screen API-control voice+text; 2B+vision+tools; fastest; latest MNN?; good voice+VAD+barge-in; light
+8 implement Marta home+AppControl+voice+2B download/push; APK installed; model nested-dir bug fixed; UI said "On a call, or type — I'm here"
+9 user: stop continue later
+10 NOW: this pack + git push user identity
+}
+
+@MNN{
+latest_github=alibaba/MNN 3.6.1 tag=3.6.1 commit=d407447 date=2026-07-22
+3.6.1_adds=Hexagon NPU backend; Transformer C4 fuse all backends; Qwen3.5 fused fix; OpenCL int4/raster fixes; mmap crash fixes; Android 4B OpenCL prefill +101.7% vs 3.6.0 IF re-exported
+official_8elite_0.6B_W4b64: Hexagon prefill=2667 decode=68.5; OpenCL 1491/71.4; CPU 336/94.3
+OUR_libMNN.so=F:\Orion\OrionAndroid\engine\mnn\src\main\jniLibs\arm64-v8a\libMNN.so size=7303320 mtime=2026-03-21
+OUR_lib_has=CPU,OpenCL,Vulkan,QNN NOT Hexagon
+OUR_qnn_jni=libQnnHtp.so libQnnHtpV79Skel.so libQnnHtpV79Stub.so libQnnSystem.so MISSING=libQnnHtpPrepare.so
+headers_expected=gradle.properties mnnSourceRoot=D:/Work/FB/GPTee/MNN ABSENT_on_this_pc
+jni=engine/mnn/src/main/cpp liborionmnn.so links imported libMNN.so
+CMake=16KB pages
+conclusion=NOT on latest 3.6.1 runtime. Next: clone 3.6.1, get official android so (MNN Chat 0.8.3 apk https://meta.alicdn.com/data/mnn/apks/mnn_chat_0_8_3.apk) rebuild orionmnn against matching headers. Do not drop so without rebuild.
+}
+
+@BENCH_4B{
+model=taobao-mnn/Qwen3.5-4B-MNN HQQ W4 block64 vision
+pc=F:\Orion\models\Qwen3.5-4B-MNN
+phone=/storage/emulated/0/Android/data/com.legion.orion.debug/files/models/Qwen3.5-4B-MNN
+files=config.json llm.mnn=3651096 llm.mnn.weight=2629387626 tokenizer.txt visual.mnn=488096 visual.mnn.weight=196768960 llm_config is_visual=true
+prompt="Explain what a tensor is in one sentence."
+settings=thread=6 prec=low mem=low power=high mmap cached_mmap reuse_kv attn=10 max_new=1024 thinking=ON temp=0.6 mixed
+CPU: load_native=1.12s UI_ready=7s prefill=31tok/2.490523s=12.45t/s decode=1024tok/94.600677s=10.82t/s vision_time=0 PSS_load=619MB PSS_gen=3202MB mmap=2779MB MemAvail=4315MB quality=excellent_thinking+correct_def PASS
+OPENCL: load_native=6.00s UI=8s COLD_prefill=31/32.932s=0.94t/s (kernel compile) decode=1024/449.496s=2.28t/s WARM_UI_decode=2.3t/s@396tok PSS_load=2925 Gfx=2328 PSS_gen=2972 Gfx=2404 MemAvail=1564MB quality=same PASS_SLOW
+QNN: SIGSEGV ~1s tombstone_05+06 /data/tombstones ; pc libMNN.so MNN::Transformer::Llm::load → Module::load → createExecutionWithExternal → Java_com_localai_llm_LlmSession_initNative ; fault=0x4 SEGV_MAPERR; official pack not QNN/Hexagon AOT; FAIL
+WINNER=CPU 4.7× decode vs OpenCL
+log_example=Generation done: {prefill_time=us, prompt_len, vision_time, decode_len, decode_time}
+raw=F:\Orion\models\bench\RESULTS.txt (local only, not in git)
+note=Engine tok/s counts chunks from first emit≈decode; native times authoritative
+first_4B_CPU_fail=Module load failed until simpler config + OpenCL then CPU with mmap worked; extra config keys / missing visual initially
+}
+
+@MODEL_2B{
+src=https://huggingface.co/taobao-mnn/Qwen3.5-2B-MNN
+pc=F:\Orion\models\Qwen3.5-2B-MNN
+phone=/storage/emulated/0/Android/data/com.legion.orion.debug/files/models/Qwen3.5-2B-MNN
+sizes: llm.mnn=2148136 llm.mnn.weight=1176647702 visual.mnn=488096 visual.mnn.weight=195587264 tokenizer=6465727 llm_config=8692 is_visual=true hidden=2048 model_type=qwen3_5
+push_bug=adb push DIR dest created dest/Qwen3.5-2B-MNN/files ; FIXED mv inner→outer
+tuned_config.json_on_disk: backend=cpu thread=6 prec=low mem=low power=high mmap cached reuse_kv attn=10 max_new=384 temp=0.7 topP=0.9 topK=20 min_p=0.05 sampler=mixed thinking=false mllm.cpu
+MartaProfile.kt matches: VOICE_MAX_NEW=192 TEXT_MAX_NEW=384 CONTEXT=6144 AGENT_ITERS=6 backend=CPU thinking=false
+status_when_stopped=Marta UI "On a call, or type — I'm here" ⇒ load succeeded
+4B still on phone too (library)
+}
+
+@CODE_MARTA{
+pkg=com.legion.orion.marta
+files=[
+AppControl.kt : facade status/setSetting/navigate/loadMartaModel/loadNamedModel/unload/openProject/listProjects/handoffToBrain
+AppControlTools.kt : orion_status orion_set orion_navigate orion_load_model orion_unload_model orion_list_projects orion_open_project handoff_to_brain
+HandoffBus.kt : MutableStateFlow BrainHandoff(brain,brief) post/consume
+MartaNavigator.kt : SharedFlow routes; OrionApp MartaNavEffect navigates
+MartaProfile.kt : 8elite 2B settings
+MartaPrompts.kt : SYSTEM receptionist+tools+handoff no think
+MartaVoice.kt : SpeechRecognizer+TTS+VAD barge-in state IDLE/LISTENING/HEARING/SPEAKING
+MartaViewModel.kt : boot scan+load 2B; AgentLoop LocalMnnProvider; tools=AppControl+Internet+read_file/list_files/grep/get_repo_map; persist chat mode=marta
+MartaScreen.kt : WorkspaceHeader+bubbles+orb+composer
+]
+wired=[
+Destinations.MARTA first
+OrionApp startDestination=marta + MartaNavEffect
+OrionApplication.BridgeEntryPoint.martaNavigator()
+AndroidManifest RECORD_AUDIO MODIFY_AUDIO_SETTINGS microphone optional
+ChatViewModel: inject HandoffBus; skip mode=marta when restoring recent chat; collect pending→switchEngine+set input+send()
+]
+tools_allowed_marta=AppControl8 + web_search web_fetch web_download list_dev_identities + read_file list_files grep get_repo_map
+tools_NOT_in_marta_loop=write_file search_replace godot_* build_apk device_ui (those stay Code/BUILD)
+DevServerState.current:Running? not .running
+GodotProcessState objects Idle/Starting/Running/Stopping
+}
+
+@EXISTING_ORION{
+tabs_old=Code Models Hub Settings
+chat_modes=CHAT BUILD CLAUDE_CODE CODEX GROK
+providers=MNN_LOCAL ANTHROPIC OPENAI GOOGLE OPENAI_COMPAT PEER
+LocalMnnProvider=PROMPT_FORMAT Hermes <tools> + HermesToolCallParser
+AgentLoop maxIter default 12 compaction 0.75
+AppAgentTools=create_project detect_stack run_terminal start/stop_dev_server typechecks preview screenshot/a11y/qa/eval/logs/html install_dep build_apk launch_app p2p_build media_queue + device screenshot/tree/interact + Internet
+GodotAgentTools=launch/stop/status/tree/screenshot/props/methods/nodes/input/scene
+InferenceController singleton + InferenceService FGS dataSync
+models dir=context.getExternalFilesDir(null)/models
+ModelDownloader.scanLocalModels registers dirs with config.json
+}
+
+@EFFICIENCY_CHANGES_IN_TREE{
+CosmicBackground.kt static nebula 12fps stars pause !RESUMED
+ChatScreen empty pulse 12fps
+ClaudeCodeAuthManager+CodexAuthManager skip-scan + 45s cache
+RuntimeBootstrap snapshotIfAlreadyProvisioned no overlay/net if on disk
+NodeController.assetsReady()
+EditorViewModel + FileTools/GrepTool/RepoMapTool skip node_modules/.git onEnter
+ChatRepository parts query+delete FTS
+EngineViewModel/ModelsViewModel 8Elite MnnSettings OpenCL default for library load (Marta overrides CPU)
+ModelConfig.defaultConfig thread=6 mmap reuseKv attn=10
+}
+
+@VOICE_SPEC{
+start=user tap orb → runtime RECORD_AUDIO → MartaVoice.startCall
+listen=SpeechRecognizer ACTION_RECOGNIZE_SPEECH EXTRA_PREFER_OFFLINE PARTIAL MAX=1 silence≈700-900ms
+speak=TTS Locale.US rate=0.96 pitch=1.02 pick best offline en neural/high-quality voice; sentence split (?<=[.!?]) stream as tokens
+barge=while SPEAKING AudioRecord VOICE_COMMUNICATION 16k mono; ignore first 280ms; adaptive noise floor*3.4 min900; 180ms speech → cancel TTS+turnJob+listen
+fx=AEC+NS+AGC if available
+stop=orb CallEnd; ViewModel.onCleared release
+NOT_impl=Sherpa/Piper/Silero-ONNX/Qwen2.5-Omni-3B/full-duplex
+why_this=light+Honor Android16 neural ASR/TTS quality; no extra 100MB models
+}
+
+@PATHS{
+git=F:\Orion\OrionAndroid
+models_pc=F:\Orion\models\{Qwen3.5-2B-MNN,Qwen3.5-4B-MNN,bench}
+models_phone=/storage/emulated/0/Android/data/com.legion.orion.debug/files/models/{Qwen3.5-2B-MNN,Qwen3.5-4B-MNN}
+apk=F:\Orion\OrionAndroid\app\build\outputs\apk\debug\app-debug.apk
+handoff=THIS_FILE HANDOFF_MARTA.ai
+jniLibs=engine/mnn/src/main/jniLibs/arm64-v8a
+}
+
+@GIT_INTENT{
+commit_author_MUST=srideepalla <srideep@flashback.inc> (already in ~/.gitconfig)
+remote=origin https://github.com/srideep47/OrionBuilderAndroid.git
+include=marta/ + listed modified sources + THIS handoff
+exclude=models weights bench tombstones apk .so rebuild artifacts
+ahead_was=2 merge commits already local
+}
+
+@NEXT_ON_NEW_PC{
+1 git clone/pull THIS repo as user; do not rewrite author
+2 copy models OR redownload: 2B from hf taobao-mnn/Qwen3.5-2B-MNN ; 4B optional; adb push FLAT into .../files/models/Qwen3.5-2B-MNN (no nested extra folder)
+3 connect Honor AXUG025411000804; if adb empty write Android USB GUID
+4 assembleDebug install -r com.legion.orion.debug
+5 VERIFY Marta: text "What is running right now" must call orion_status and speak/print snapshot
+6 VERIFY tools: "turn haptics off" → orion_set; "open models" → orion_navigate
+7 VERIFY voice: tap orb, grant mic, speak, hear TTS, interrupt mid-sentence (barge-in)
+8 VERIFY handoff: "ask Claude to scaffold a todo app" → Code tab + Claude + brief
+9 OPTIONAL: upgrade libMNN to 3.6.1+Hexagon with matching headers+rebuild; re-bench 2B CPU vs OpenCL vs Hexagon
+10 OPTIONAL: Qwen2.5-Omni-3B MNN for native speech later
+11 do not regress efficiency CosmicBackground
+12 2B always-on; 4B only if user asks local specialist and RAM allows
+}
+
+@SMOKE_GAPS{
+text_send_not_run
+voice_call_not_run
+handoff_not_run
+2B_toks_not_measured
+MNN_3.6.1_not_integrated
+}
+
+@BUGS_KNOWN{
+B1 adb push directory nests name
+B2 QNN SIGSEGV official 4B
+B3 OpenCL 4B decode 2.28 t/s on this so (first-run prefill 33s kernels)
+B4 PowerShell > screencap corrupts png; use adb pull /sdcard/*.png
+B5 uiautomator dump fails "idle state" during native gen
+B6 ChatViewModel handoff collect+consume race benign
+B7 Marta conversation no compaction yet (6k window)
+B8 Engine RAM calculator may show model 0B if walk skips; ignore
+B9 INSTALL_FAILED_UPDATE_INCOMPATIBLE happened once; uninstall wipes data+models
+B10 gradle kspCaches E: vs F: incremental; stop daemons+clean ksp if needed
+}
+
+@PROMPT_RESUME_INLINE{
+CONTINUE Orion Marta. Read repo file HANDOFF_MARTA.ai FIRST (lossless session pack). Repo=OrionAndroid main. Device=Honor Magic7 Pro AXUG025411000804 Android16 SM8750 12GB. pkg=com.legion.orion.debug. Marta is home. Brain=Qwen3.5-2B-MNN vision CPU 8Elite profile thinking OFF. Control via AppControl APIs not UI taps. Last state: 2B on phone, Marta loaded, smoke tests NOT done. Do: (1) verify text orion_status (2) voice barge-in (3) handoff_to_brain (4) only then consider MNN 3.6.1 Hexagon rebuild. Never commit as AI; author is srideepalla <srideep@flashback.inc>. Never commit weights. Do not reopen settled decisions in HANDOFF.
+}

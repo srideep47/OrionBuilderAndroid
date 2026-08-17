@@ -8,6 +8,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
+private val SKIP_WALK_DIRS = setOf("node_modules", ".git", ".orion", "build", ".gradle", "dist")
+
 /**
  * Regex content search across project files. Kotlin implementation for now; a bundled-ripgrep
  * fast path arrives with the build-tools work in a later phase.
@@ -30,9 +32,8 @@ class GrepTool : AgentTool {
         val base = ctx.projectDir.canonicalFile
         val hits = ArrayList<String>()
         dir.walkTopDown()
+            .onEnter { it == dir || it.name !in SKIP_WALK_DIRS }
             .filter { it.isFile && it.length() < 1_000_000 }
-            .filterNot { it.path.contains("${File.separator}node_modules${File.separator}") }
-            .filterNot { it.path.contains("${File.separator}.git${File.separator}") }
             .forEach { file ->
                 runCatching {
                     file.useLines { lines ->
