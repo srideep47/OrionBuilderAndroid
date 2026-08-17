@@ -58,6 +58,7 @@ import com.legion.orion.feature.chat.ChatMode
 import com.legion.orion.feature.chat.ChatViewModel
 import com.legion.orion.feature.chat.ClaudeCodeOptionsSheet
 import com.legion.orion.feature.chat.CodexOptionsSheet
+import com.legion.orion.feature.chat.GrokOptionsSheet
 import com.legion.orion.feature.chat.isAgentCli
 import com.legion.orion.feature.chat.CommandHeader
 import com.legion.orion.feature.chat.GodotChatCard
@@ -126,16 +127,18 @@ fun CodeScreen(
     var modelSheetOpen by remember { mutableStateOf(false) }
     var claudeOptionsSheetOpen by remember { mutableStateOf(false) }
     var codexOptionsSheetOpen by remember { mutableStateOf(false) }
+    var grokOptionsSheetOpen by remember { mutableStateOf(false) }
     var projectPickerOpen by remember { mutableStateOf(false) }
 
     val openModelPicker = {
-        if (ui.mode == ChatMode.CODEX) {
-            codexOptionsSheetOpen = true
-        } else if (ui.mode == ChatMode.CLAUDE_CODE) {
-            claudeOptionsSheetOpen = true
-        } else {
-            ui.selectedProvider?.let(chatVm::loadModelsFor)
-            modelSheetOpen = true
+        when (ui.mode) {
+            ChatMode.CODEX -> codexOptionsSheetOpen = true
+            ChatMode.CLAUDE_CODE -> claudeOptionsSheetOpen = true
+            ChatMode.GROK -> grokOptionsSheetOpen = true
+            else -> {
+                ui.selectedProvider?.let(chatVm::loadModelsFor)
+                modelSheetOpen = true
+            }
         }
     }
 
@@ -293,6 +296,18 @@ fun CodeScreen(
                 onReinstall = { chatVm.installCodexRuntime(force = true) },
                 onSwitchToClaude = { chatVm.switchEngine(ChatMode.CLAUDE_CODE) },
                 onDismiss = { codexOptionsSheetOpen = false },
+            )
+        }
+        if (grokOptionsSheetOpen) {
+            GrokOptionsSheet(
+                ui = ui,
+                onPick = { model, effort, permissionMode -> chatVm.setGrokOptions(model, effort, permissionMode) },
+                onSignIn = chatVm::beginGrokLogin,
+                onLogout = chatVm::signOutGrok,
+                onReinstall = { chatVm.installGrokRuntime(force = true) },
+                onSwitchToClaude = { chatVm.switchEngine(ChatMode.CLAUDE_CODE) },
+                onSwitchToCodex = { chatVm.switchEngine(ChatMode.CODEX) },
+                onDismiss = { grokOptionsSheetOpen = false },
             )
         }
         if (projectPickerOpen) {

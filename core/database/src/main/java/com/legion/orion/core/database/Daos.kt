@@ -207,3 +207,19 @@ interface CodexSessionDao {
     @Query("DELETE FROM codex_sessions")
     suspend fun clearAll()
 }
+
+@Dao
+interface GrokSessionDao {
+    @Query("SELECT * FROM grok_sessions WHERE projectId = :projectId")
+    suspend fun get(projectId: String): GrokSessionEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(session: GrokSessionEntity)
+
+    @Query("DELETE FROM grok_sessions WHERE projectId = :projectId")
+    suspend fun clear(projectId: String)
+
+    /** A Grok session belongs to the signed-in account that created it; never resume it after an account change. */
+    @Query("DELETE FROM grok_sessions")
+    suspend fun clearAll()
+}

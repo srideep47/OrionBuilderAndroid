@@ -163,6 +163,7 @@ dependencies {
     implementation(libs.jgit)
     implementation(libs.commons.compress)
     implementation(libs.xz)
+    implementation(libs.brotli.dec)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.ext.junit)

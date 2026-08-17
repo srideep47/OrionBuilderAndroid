@@ -19,11 +19,17 @@ import com.legion.orion.codex.CodexEventMapper
 import com.legion.orion.codex.CodexInstaller
 import com.legion.orion.codex.CodexProcess
 import com.legion.orion.codex.CodexToolchain
+import com.legion.orion.grok.GrokAuthManager
+import com.legion.orion.grok.GrokEventMapper
+import com.legion.orion.grok.GrokInstaller
+import com.legion.orion.grok.GrokProcess
+import com.legion.orion.grok.GrokToolchain
 import com.legion.orion.build.DevelopmentWorkService
 import com.legion.orion.core.database.ChatEntity
 import com.legion.orion.core.database.ClaudeCodeSessionDao
 import com.legion.orion.core.database.ClaudeCodeSessionEntity
 import com.legion.orion.core.database.CodexSessionEntity
+import com.legion.orion.core.database.GrokSessionEntity
 import com.legion.orion.core.database.ProviderEntity
 import com.legion.orion.core.datastore.SettingsRepository
 import com.legion.orion.data.chat.ChatRepository
@@ -97,16 +103,17 @@ private const val TITLE_SYSTEM_PROMPT =
         "Reply with ONLY the title — 3 to 6 words, Title Case, no surrounding quotes, " +
         "no trailing punctuation, and no preamble or explanation."
 
-/** Unified command modes: plain chat, agentic build (Orion's own tool loop), or one of the two real
- * agent CLIs — Claude Code (`com.legion.orion.claudecode`) and Codex (`com.legion.orion.codex`) — both
- * subscription-billed and both running in the same bundled Linux environment against the same projects.
+/** Unified command modes: plain chat, agentic build (Orion's own tool loop), or one of the real
+ * agent CLIs — Claude Code, Codex, and Grok Build — all subscription/account-billed and all running
+ * in the same bundled Linux environment against the same projects.
  *
- * [CLAUDE_CODE] and [CODEX] are interchangeable per chat: see [ChatViewModel.switchEngine], which hands
- * a conversation from one to the other (the usual reason being that one account hit its rate limit). */
-enum class ChatMode { CHAT, BUILD, CLAUDE_CODE, CODEX }
+ * The three CLI modes are interchangeable per chat via [ChatViewModel.switchEngine] (usual reason:
+ * one account hit its rate limit). */
+enum class ChatMode { CHAT, BUILD, CLAUDE_CODE, CODEX, GROK }
 
-/** The two real-CLI modes, i.e. the ones [ChatViewModel.switchEngine] can move a conversation between. */
-val ChatMode.isAgentCli: Boolean get() = this == ChatMode.CLAUDE_CODE || this == ChatMode.CODEX
+/** Real-CLI modes [ChatViewModel.switchEngine] can move a conversation between. */
+val ChatMode.isAgentCli: Boolean
+    get() = this == ChatMode.CLAUDE_CODE || this == ChatMode.CODEX || this == ChatMode.GROK
 
 data class StreamingMessage(
     val messageId: String,
@@ -134,7 +141,93 @@ data class ChatUiState(
     val modelSheetModels: List<String> = emptyList(),
     val claudeCode: ClaudeCodeUiState = ClaudeCodeUiState(),
     val codex: CodexUiState = CodexUiState(),
+    val grok: GrokUiState = GrokUiState(),
 )
+
+/**
+ * State for Grok Build mode's provisioning/sign-in surface (counterpart of [CodexUiState]).
+ * Device-code login: URL + short code, no paste-back field.
+ *
+ * Models / efforts / context windows are filled from Grok's live catalog (`/v1/models` +
+ * `models_cache.json`). Context % comes from live stream usage and/or local `signals.json`.
+ */
+data class GrokUiState(
+    val checking: Boolean = false,
+    val installed: Boolean = false,
+    val needsOnlyBinary: Boolean = false,
+    val installProgress: String? = null,
+    val installedVersion: String? = null,
+    val loggedIn: Boolean = false,
+    val authMethod: String? = null,
+    val email: String? = null,
+    val subscriptionTier: String? = null,
+    val loginUrl: String? = null,
+    val loginUserCode: String? = null,
+    val loginBusy: Boolean = false,
+    val loginError: String? = null,
+    val accountActionBusy: Boolean = false,
+    val accountActionError: String? = null,
+    /** null = omit `-m` and let Grok pick its default model. */
+    val model: String? = null,
+    val effort: String = "high",
+    val permissionMode: String = "bypassPermissions",
+    val sessionCostUsd: Double = 0.0,
+    val lastTurnInputTokens: Int = 0,
+    val lastTurnOutputTokens: Int = 0,
+    val lastTurnCacheReadTokens: Int = 0,
+    val contextUsedTokens: Long = 0,
+    val contextWindowTokens: Long = 500_000,
+    val contextUsedPercentage: Double? = null,
+    val contextRemainingPercentage: Double? = null,
+    /** Billing-period usage from Grok `/v1/billing` (monthlyLimit / used). */
+    val usageLimit: Long = 0,
+    val usageUsed: Long = 0,
+    val usagePercent: Double? = null,
+    /** Live catalog from Grok Build (ids only; labels live in [availableModels]). */
+    val availableModels: List<GrokModelUi> = listOf(GrokModelUi.DEFAULT),
+    val effortOptions: List<GrokEffortUi> = GrokEffortUi.DEFAULTS,
+    val accountUsageRefreshing: Boolean = false,
+    val accountUsageError: String? = null,
+    val accountUsageFetchedAt: Long? = null,
+) {
+    companion object {
+        val EFFORT_OPTIONS = listOf("high", "medium", "low")
+        val PERMISSION_OPTIONS = listOf("bypassPermissions", "acceptEdits", "default", "plan")
+    }
+}
+
+data class GrokModelUi(
+    val id: String,
+    val name: String,
+    val description: String = "",
+    val contextWindow: Long = 500_000,
+    val defaultEffort: String = "high",
+    val efforts: List<GrokEffortUi> = GrokEffortUi.DEFAULTS,
+) {
+    companion object {
+        val DEFAULT = GrokModelUi(
+            id = "grok-4.5",
+            name = "Grok 4.5",
+            description = "xAI frontier model for Grok Build",
+            contextWindow = 500_000,
+            defaultEffort = "high",
+        )
+    }
+}
+
+data class GrokEffortUi(
+    val id: String,
+    val label: String,
+    val description: String = "",
+) {
+    companion object {
+        val DEFAULTS = listOf(
+            GrokEffortUi("high", "High", "Highest implementation quality with extensive reasoning"),
+            GrokEffortUi("medium", "Medium", "Balanced effort with standard implementation and testing"),
+            GrokEffortUi("low", "Low", "Quick, fast implementations"),
+        )
+    }
+}
 
 /**
  * State for the Codex mode's provisioning/sign-in surface, the counterpart of [ClaudeCodeUiState].
@@ -255,8 +348,10 @@ class ChatViewModel @Inject constructor(
     @ApplicationContext private val appContext: Context,
     private val claudeCodeSessionDao: ClaudeCodeSessionDao,
     private val codexSessionDao: com.legion.orion.core.database.CodexSessionDao,
+    private val grokSessionDao: com.legion.orion.core.database.GrokSessionDao,
     private val devServerState: com.legion.orion.runtime.DevServerState,
     private val claudeToolBridge: ClaudeToolBridge,
+    private val runtimeBootstrap: com.legion.orion.runtime.RuntimeBootstrap,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(ChatUiState())
@@ -292,6 +387,15 @@ class ChatViewModel @Inject constructor(
     private val codexAuth by lazy { CodexAuthManager(codexToolchain) }
     private val codexProcesses = mutableMapOf<String, CodexProcess>()
     private var codexLoginSession: CodexAuthManager.LoginSession? = null
+
+    // ── Grok Build (real CLI) ──
+    private val grokToolchain by lazy { GrokToolchain(claudeCodeToolchain) }
+    private val grokInstaller by lazy { GrokInstaller(grokToolchain) }
+    private val grokAuth by lazy { GrokAuthManager(grokToolchain) }
+    private val grokAccount by lazy { com.legion.orion.grok.GrokAccountService(grokToolchain) }
+    private val grokProcesses = mutableMapOf<String, GrokProcess>()
+    private var grokLoginSession: GrokAuthManager.LoginSession? = null
+    private var lastGrokUsageRefreshAt = 0L
 
     val chats: StateFlow<List<ChatEntity>> = chatRepo.observeChats()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -340,8 +444,47 @@ class ChatViewModel @Inject constructor(
                 if (!localSessionPrimed) runCatching { controller.reset() }
                 if (recent.mode == "claude_code") checkClaudeCodeReadiness()
                 if (recent.mode == "codex") checkCodexReadiness()
+                if (recent.mode == "grok") checkGrokReadiness()
             }
             backfillChatTitles()
+            // Always refresh CLI readiness after cold start — bootstrap may already be installing.
+            checkClaudeCodeReadiness()
+            checkCodexReadiness()
+            checkGrokReadiness()
+        }
+
+        // Mirror automatic RuntimeBootstrap progress into the mode banners (no Install tap needed).
+        viewModelScope.launch {
+            runtimeBootstrap.state.collect { boot ->
+                if (boot.busy) {
+                    val line = listOfNotNull(boot.message, boot.detail.takeIf { it.isNotBlank() })
+                        .joinToString(" — ")
+                    _ui.value = _ui.value.copy(
+                        claudeCode = _ui.value.claudeCode.copy(
+                            installProgress = if (!boot.claudeReady) line else null,
+                            installed = boot.claudeReady || _ui.value.claudeCode.installed,
+                        ),
+                        codex = _ui.value.codex.copy(
+                            installProgress = if (!boot.codexReady) line else null,
+                            installed = boot.codexReady || _ui.value.codex.installed,
+                        ),
+                        grok = _ui.value.grok.copy(
+                            installProgress = if (!boot.grokReady) line else null,
+                            installed = boot.grokReady || _ui.value.grok.installed,
+                        ),
+                    )
+                }
+                if (boot.finishedPass) {
+                    _ui.value = _ui.value.copy(
+                        claudeCode = _ui.value.claudeCode.copy(installProgress = null),
+                        codex = _ui.value.codex.copy(installProgress = null),
+                        grok = _ui.value.grok.copy(installProgress = null),
+                    )
+                    checkClaudeCodeReadiness()
+                    checkCodexReadiness()
+                    checkGrokReadiness()
+                }
+            }
         }
 
         viewModelScope.launch {
@@ -385,13 +528,16 @@ class ChatViewModel @Inject constructor(
             }
         }
 
-        // Account quotas are global rather than project-specific. Refresh once per minute while the
-        // Claude surface is active; the reset countdown continues to be formatted locally.
+        // Account quotas / catalogs are global rather than project-specific. Refresh once per minute
+        // while an agent CLI surface is active.
         viewModelScope.launch {
             while (isActive) {
                 delay(60_000)
-                if (_ui.value.mode == ChatMode.CLAUDE_CODE && _ui.value.claudeCode.loggedIn) {
-                    refreshClaudeAccountUsageInternal(force = false)
+                when {
+                    _ui.value.mode == ChatMode.CLAUDE_CODE && _ui.value.claudeCode.loggedIn ->
+                        refreshClaudeAccountUsageInternal(force = false)
+                    _ui.value.mode == ChatMode.GROK && _ui.value.grok.loggedIn ->
+                        refreshGrokAccountUsageInternal(force = false)
                 }
             }
         }
@@ -469,6 +615,10 @@ class ChatViewModel @Inject constructor(
             checkCodexReadiness()
             projectId?.let { devServerState.set(com.legion.orion.runtime.DevServerState.Running(ClaudeCodeProcess.PREVIEW_PORT, projects.dirFor(it).path)) }
         }
+        if (mode == ChatMode.GROK) {
+            checkGrokReadiness()
+            projectId?.let { devServerState.set(com.legion.orion.runtime.DevServerState.Running(ClaudeCodeProcess.PREVIEW_PORT, projects.dirFor(it).path)) }
+        }
     }
 
     /** The chat-mode string persisted on `ChatEntity.mode` ⇄ [ChatMode]. Kept in one place because it is
@@ -478,6 +628,7 @@ class ChatViewModel @Inject constructor(
         "build", "agent" -> ChatMode.BUILD
         "claude_code" -> ChatMode.CLAUDE_CODE
         "codex" -> ChatMode.CODEX
+        "grok" -> ChatMode.GROK
         else -> ChatMode.CHAT
     }
 
@@ -485,6 +636,7 @@ class ChatViewModel @Inject constructor(
         ChatMode.BUILD -> "build"
         ChatMode.CLAUDE_CODE -> "claude_code"
         ChatMode.CODEX -> "codex"
+        ChatMode.GROK -> "grok"
         ChatMode.CHAT -> "ask"
     }
 
@@ -678,6 +830,305 @@ class ChatViewModel @Inject constructor(
             } else {
                 codexProcesses.values.forEach { it.stop() }
                 codexProcesses.clear()
+            }
+        }
+    }
+
+    // ── Grok Build provisioning / sign-in ──
+
+    fun checkGrokReadiness() {
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(grok = _ui.value.grok.copy(checking = true))
+            val status = grokToolchain.status()
+            val auth = if (status.provisioned) runCatching { grokAuth.status() }.getOrNull() else null
+            var model = settings.grokModel.first()
+            // Migrate obsolete model ids (old UI offered a fake "grok-build" chip).
+            if (model.equals("grok-build", ignoreCase = true)) model = "grok-4.5"
+            val effort = settings.grokEffort.first().let { e ->
+                when (e) {
+                    "xhigh", "max", "none", "minimal" -> "high"
+                    else -> e
+                }
+            }
+            val permissionMode = settings.grokPermissionMode.first()
+            // Seed catalog + context from disk immediately (fast), then refresh live catalog.
+            val localSnap = if (status.provisioned && auth?.loggedIn == true) {
+                runCatching { grokAccount.fetch(includeNetwork = false) }.getOrNull()
+            } else {
+                null
+            }
+            val catalog = localSnap?.models?.map { it.toUi() }?.ifEmpty { null }
+                ?: listOf(GrokModelUi.DEFAULT)
+            // Prefer a real catalog model — never leave a null/"Grok" placeholder when we know the only model is Grok 4.5.
+            val resolvedModel = when {
+                model != null && catalog.any { it.id == model } -> model
+                localSnap?.defaultModelId != null && catalog.any { it.id == localSnap.defaultModelId } ->
+                    localSnap.defaultModelId
+                else -> catalog.firstOrNull()?.id ?: "grok-4.5"
+            }
+            if (resolvedModel != model) {
+                settings.setGrokOptions(resolvedModel, effort, permissionMode)
+            }
+            val selectedModelMeta = catalog.firstOrNull { it.id == resolvedModel } ?: catalog.firstOrNull()
+            val efforts = (selectedModelMeta?.efforts ?: GrokEffortUi.DEFAULTS)
+                .filter { it.id in setOf("high", "medium", "low") }
+                .ifEmpty { GrokEffortUi.DEFAULTS }
+            val window = when {
+                localSnap != null && localSnap.contextWindowTokens > 0 -> localSnap.contextWindowTokens
+                selectedModelMeta != null -> selectedModelMeta.contextWindow
+                else -> 500_000L
+            }
+            val used = localSnap?.contextTokensUsed ?: 0L
+            val pct = localSnap?.contextWindowUsagePercent
+                ?: if (window > 0 && used > 0) used * 100.0 / window else null
+            _ui.value = _ui.value.copy(
+                grok = _ui.value.grok.copy(
+                    checking = false,
+                    installed = status.provisioned,
+                    needsOnlyBinary = status.needsOnlyGrokBinary,
+                    installedVersion = status.installedVersion,
+                    loggedIn = auth?.loggedIn == true,
+                    authMethod = auth?.method ?: localSnap?.email,
+                    email = localSnap?.email,
+                    subscriptionTier = localSnap?.subscriptionTier,
+                    model = resolvedModel,
+                    effort = if (effort in efforts.map { it.id }) effort else (selectedModelMeta?.defaultEffort ?: "high"),
+                    permissionMode = permissionMode,
+                    availableModels = catalog,
+                    effortOptions = efforts,
+                    contextUsedTokens = used,
+                    contextWindowTokens = window,
+                    contextUsedPercentage = pct,
+                    contextRemainingPercentage = pct?.let { (100.0 - it).coerceAtLeast(0.0) },
+                ),
+            )
+            if (auth?.loggedIn == true) refreshGrokAccountUsage(force = false)
+        }
+    }
+
+    fun refreshGrokAccountUsage(force: Boolean = true) {
+        viewModelScope.launch { refreshGrokAccountUsageInternal(force) }
+    }
+
+    private suspend fun refreshGrokAccountUsageInternal(force: Boolean) {
+        if (!_ui.value.grok.installed || !_ui.value.grok.loggedIn) return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastGrokUsageRefreshAt < 45_000L) return
+        if (_ui.value.grok.accountUsageRefreshing) return
+        _ui.value = _ui.value.copy(
+            grok = _ui.value.grok.copy(accountUsageRefreshing = true, accountUsageError = null),
+        )
+        val result = runCatching { grokAccount.fetch(includeNetwork = true) }
+        lastGrokUsageRefreshAt = System.currentTimeMillis()
+        result.onSuccess { snap ->
+            val catalog = snap.models.map { it.toUi() }.ifEmpty { listOf(GrokModelUi.DEFAULT) }
+            var selectedId = _ui.value.grok.model
+            if (selectedId == null || catalog.none { it.id == selectedId }) {
+                selectedId = snap.defaultModelId ?: catalog.first().id
+                settings.setGrokOptions(selectedId, _ui.value.grok.effort, _ui.value.grok.permissionMode)
+            }
+            val selected = catalog.firstOrNull { it.id == selectedId } ?: catalog.firstOrNull()
+            val efforts = (selected?.efforts ?: GrokEffortUi.DEFAULTS)
+                .filter { it.id in setOf("high", "medium", "low") }
+                .ifEmpty { GrokEffortUi.DEFAULTS }
+            val window = when {
+                snap.contextWindowTokens > 0 -> snap.contextWindowTokens
+                selected != null -> selected.contextWindow
+                else -> _ui.value.grok.contextWindowTokens
+            }
+            // Prefer session signals for context fill — not last-turn token totals.
+            val used = if (snap.contextTokensUsed > 0) snap.contextTokensUsed else _ui.value.grok.contextUsedTokens
+            val pct = snap.contextWindowUsagePercent
+                ?: if (window > 0 && used > 0) used * 100.0 / window else _ui.value.grok.contextUsedPercentage
+            val effort = _ui.value.grok.effort.let { e ->
+                if (e in efforts.map { it.id }) e else (selected?.defaultEffort ?: "high")
+            }
+            _ui.value = _ui.value.copy(
+                grok = _ui.value.grok.copy(
+                    accountUsageRefreshing = false,
+                    accountUsageError = snap.error,
+                    accountUsageFetchedAt = snap.fetchedAtMillis,
+                    email = snap.email ?: _ui.value.grok.email,
+                    authMethod = snap.email ?: snap.displayName ?: _ui.value.grok.authMethod,
+                    subscriptionTier = snap.subscriptionTier ?: _ui.value.grok.subscriptionTier,
+                    availableModels = catalog,
+                    model = selectedId,
+                    effortOptions = efforts,
+                    effort = effort,
+                    contextUsedTokens = used,
+                    contextWindowTokens = window,
+                    contextUsedPercentage = pct,
+                    contextRemainingPercentage = pct?.let { (100.0 - it).coerceAtLeast(0.0) },
+                    usageLimit = snap.usageLimit,
+                    usageUsed = snap.usageUsed,
+                    usagePercent = snap.usagePercent,
+                ),
+            )
+        }.onFailure {
+            _ui.value = _ui.value.copy(
+                grok = _ui.value.grok.copy(
+                    accountUsageRefreshing = false,
+                    accountUsageError = it.message?.take(200) ?: "Could not refresh Grok account",
+                ),
+            )
+        }
+    }
+
+    private fun com.legion.orion.grok.GrokAccountService.ModelOption.toUi() = GrokModelUi(
+        id = id,
+        name = name,
+        description = description,
+        contextWindow = contextWindow,
+        defaultEffort = defaultEffort,
+        efforts = efforts.map { GrokEffortUi(it.id, it.label, it.description) },
+    )
+
+    fun installGrokRuntime(force: Boolean = false) {
+        if (_ui.value.grok.installProgress != null) return
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(grok = _ui.value.grok.copy(installProgress = "Starting download…", loginError = null))
+            runCatching {
+                grokInstaller.install(force = force) { progress ->
+                    _ui.value = _ui.value.copy(grok = _ui.value.grok.copy(installProgress = progress))
+                }
+            }.onFailure {
+                _ui.value = _ui.value.copy(
+                    grok = _ui.value.grok.copy(
+                        installProgress = null,
+                        loginError = "Grok Build install failed: ${it.message}",
+                    ),
+                )
+                return@launch
+            }
+            _ui.value = _ui.value.copy(grok = _ui.value.grok.copy(installProgress = null))
+            checkGrokReadiness()
+        }
+    }
+
+    fun beginGrokLogin() {
+        if (_ui.value.grok.loginBusy || _ui.value.grok.accountActionBusy) return
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(
+                grok = _ui.value.grok.copy(
+                    loginBusy = true,
+                    loginError = null,
+                    loginUrl = null,
+                    loginUserCode = null,
+                ),
+            )
+            val session = runCatching {
+                grokAuth.beginDeviceLogin { prompt ->
+                    _ui.value = _ui.value.copy(
+                        grok = _ui.value.grok.copy(loginUrl = prompt.url, loginUserCode = prompt.userCode),
+                    )
+                }
+            }.getOrElse { failure ->
+                _ui.value = _ui.value.copy(
+                    grok = _ui.value.grok.copy(
+                        loginBusy = false,
+                        loginError = failure.message ?: "Could not start Grok Build sign-in",
+                    ),
+                )
+                return@launch
+            }
+            grokLoginSession = session
+            val ok = session.awaitResult()
+            grokLoginSession = null
+            _ui.value = _ui.value.copy(
+                grok = _ui.value.grok.copy(
+                    loginBusy = false,
+                    loginUrl = null,
+                    loginUserCode = null,
+                    loginError = if (ok) null else {
+                        session.output().lineSequence().lastOrNull { it.isNotBlank() }?.take(240)
+                            ?: "Grok Build sign-in did not complete"
+                    },
+                ),
+            )
+            if (ok) checkGrokReadiness()
+        }
+    }
+
+    fun cancelGrokLogin() {
+        grokLoginSession?.cancel()
+        grokLoginSession = null
+        _ui.value = _ui.value.copy(
+            grok = _ui.value.grok.copy(loginBusy = false, loginUrl = null, loginUserCode = null),
+        )
+    }
+
+    fun signOutGrok() {
+        if (_ui.value.grok.accountActionBusy || _ui.value.grok.loginBusy) return
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(
+                grok = _ui.value.grok.copy(accountActionBusy = true, accountActionError = null),
+            )
+            runCatching {
+                grokProcesses.values.forEach { it.stop() }
+                grokProcesses.clear()
+                grokOptionsDirty = false
+                grokSessionDao.clearAll()
+                grokAuth.logout()
+            }.onFailure { failure ->
+                _ui.value = _ui.value.copy(
+                    grok = _ui.value.grok.copy(
+                        accountActionBusy = false,
+                        accountActionError = failure.message?.take(240) ?: "Grok Build sign-out failed",
+                    ),
+                )
+                return@launch
+            }
+            _ui.value = _ui.value.copy(
+                grok = _ui.value.grok.copy(
+                    accountActionBusy = false,
+                    loggedIn = false,
+                    authMethod = null,
+                    sessionCostUsd = 0.0,
+                    lastTurnInputTokens = 0,
+                    lastTurnOutputTokens = 0,
+                    lastTurnCacheReadTokens = 0,
+                    contextUsedTokens = 0,
+                ),
+            )
+            checkGrokReadiness()
+        }
+    }
+
+    private var grokOptionsDirty = false
+
+    fun setGrokOptions(model: String?, effort: String, permissionMode: String) {
+        val catalog = _ui.value.grok.availableModels
+        val meta = catalog.firstOrNull { it.id == model }
+        val efforts = meta?.efforts ?: _ui.value.grok.effortOptions
+        val resolvedEffort = if (effort in efforts.map { it.id }) effort else (meta?.defaultEffort ?: effort)
+        val window = meta?.contextWindow?.takeIf { it > 0 } ?: _ui.value.grok.contextWindowTokens
+        _ui.value = _ui.value.copy(
+            grok = _ui.value.grok.copy(
+                model = model,
+                effort = resolvedEffort,
+                permissionMode = permissionMode,
+                effortOptions = efforts,
+                contextWindowTokens = window,
+                // Keep used tokens; recompute % against the new window.
+                contextUsedPercentage = if (window > 0 && _ui.value.grok.contextUsedTokens > 0) {
+                    _ui.value.grok.contextUsedTokens * 100.0 / window
+                } else {
+                    _ui.value.grok.contextUsedPercentage
+                },
+                contextRemainingPercentage = if (window > 0 && _ui.value.grok.contextUsedTokens > 0) {
+                    (100.0 - _ui.value.grok.contextUsedTokens * 100.0 / window).coerceAtLeast(0.0)
+                } else {
+                    _ui.value.grok.contextRemainingPercentage
+                },
+            ),
+        )
+        viewModelScope.launch {
+            settings.setGrokOptions(model, resolvedEffort, permissionMode)
+            if (_ui.value.busy) {
+                grokOptionsDirty = true
+            } else {
+                grokProcesses.values.forEach { it.stop() }
+                grokProcesses.clear()
             }
         }
     }
@@ -910,7 +1361,11 @@ class ChatViewModel @Inject constructor(
                 // inside the shared project sandbox, and both CLIs read them with their own file tools.
                 val prompt = claudePromptWithAttachments(text, state.attachments)
                 conversation.add(ChatMessage(ChatMessage.Role.USER, prompt))
-                if (state.mode == ChatMode.CODEX) runCodex(chatId, prompt) else runClaudeCode(chatId, prompt)
+                when (state.mode) {
+                    ChatMode.CODEX -> runCodex(chatId, prompt)
+                    ChatMode.GROK -> runGrok(chatId, prompt)
+                    else -> runClaudeCode(chatId, prompt)
+                }
             }
             return
         }
@@ -1448,22 +1903,161 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    // ── Grok Build (real CLI) ──
+
+    private suspend fun grokSessionFor(projectId: String, projectDir: File): GrokProcess {
+        grokProcesses[projectId]?.let { return it }
+        val existing = grokSessionDao.get(projectId)
+        val gx = _ui.value.grok
+        val process = GrokProcess(
+            toolchain = grokToolchain,
+            projectDir = projectDir,
+            sessionId = existing?.sessionId,
+            onSessionIdAssigned = { sid ->
+                viewModelScope.launch {
+                    grokSessionDao.upsert(GrokSessionEntity(projectId, sid, System.currentTimeMillis()))
+                }
+            },
+            model = gx.model,
+            effort = gx.effort,
+            permissionMode = gx.permissionMode,
+            toolBridgePort = claudeToolBridge.start(),
+            toolBridgeToken = claudeToolBridge.token,
+        )
+        grokProcesses[projectId] = process
+        return process
+    }
+
+    private suspend fun runGrok(chatId: String, userText: String) {
+        val isFreshProject = projectId == null
+        if (isFreshProject) {
+            projectResolutionMutex.withLock {
+                if (projectId == null) projectId = projects.createBlankProject("New Project").id
+            }
+        }
+        val pid = projectId!!
+        activeProject.set(pid)
+        chatRepo.bindChatProject(chatId, pid, "grok")
+        _ui.value = _ui.value.copy(projectName = projects.get(pid)?.name)
+        val dir = projects.dirFor(pid)
+
+        val status = grokToolchain.status()
+        if (!status.provisioned) {
+            _ui.value = _ui.value.copy(
+                busy = false,
+                error = if (status.needsOnlyGrokBinary) {
+                    "Grok Build isn't downloaded yet — open the mode picker to install it."
+                } else {
+                    "The Linux runtime isn't installed yet — open the mode picker to install it."
+                },
+            )
+            return
+        }
+        val auth = runCatching { grokAuth.status() }.getOrNull()
+        if (auth?.loggedIn != true) {
+            _ui.value = _ui.value.copy(busy = false, error = "Sign in to Grok Build first — open the mode picker to sign in.")
+            return
+        }
+
+        devServerState.set(com.legion.orion.runtime.DevServerState.Running(ClaudeCodeProcess.PREVIEW_PORT, dir.path))
+
+        val snapshotter = GitSnapshotter(dir)
+        val snapshotRef = runCatching { snapshotter.snapshot(pid, "grok_${System.currentTimeMillis()}") }.getOrNull()
+
+        val process = grokSessionFor(pid, dir)
+        val assistantId = chatRepo.beginAssistantMessage(chatId)
+        val mapper = GrokEventMapper()
+        streamingFlow.value = StreamingMessage(assistantId, mapper.currentParts)
+
+        streamJob?.cancel()
+        streamJob = viewModelScope.launch {
+            val workId = "grok:$pid"
+            DevelopmentWorkService.acquire(appContext, workId, "Grok Build · ${_ui.value.projectName ?: "project"}")
+            var errorMsg: String? = null
+            var resultText: String? = null
+            try {
+                process.sendTurn(userText).collect { obj ->
+                    when (val outcome = mapper.accept(obj)) {
+                        is GrokEventMapper.Outcome.TurnComplete -> {
+                            resultText = outcome.resultText
+                            if (outcome.isError) errorMsg = outcome.resultText ?: "Grok Build reported an error"
+                            outcome.usage?.let { u ->
+                                _ui.value = _ui.value.copy(
+                                    grok = _ui.value.grok.copy(
+                                        sessionCostUsd = _ui.value.grok.sessionCostUsd + u.costUsd,
+                                        lastTurnInputTokens = u.inputTokens,
+                                        lastTurnOutputTokens = u.outputTokens,
+                                        lastTurnCacheReadTokens = u.cacheReadTokens,
+                                    ),
+                                )
+                            }
+                        }
+                        is GrokEventMapper.Outcome.ProcessDied -> errorMsg = outcome.message
+                        GrokEventMapper.Outcome.InProgress -> {}
+                    }
+                    // Prefer explicit context fields from the stream; otherwise keep session signals.
+                    val live = mapper.liveContextUsage
+                    val window = live.contextWindowTokens.takeIf { it > 0 }
+                        ?: _ui.value.grok.contextWindowTokens.takeIf { it > 0 }
+                        ?: 500_000L
+                    val used = live.usedTokens.takeIf { it > 0 } ?: _ui.value.grok.contextUsedTokens
+                    val pct = if (window > 0 && used > 0) used * 100.0 / window else _ui.value.grok.contextUsedPercentage
+                    _ui.value = _ui.value.copy(
+                        grok = _ui.value.grok.copy(
+                            contextUsedTokens = used,
+                            contextWindowTokens = window,
+                            contextUsedPercentage = pct,
+                            contextRemainingPercentage = pct?.let { (100.0 - it).coerceAtLeast(0.0) },
+                        ),
+                    )
+                    val parts = if (snapshotRef != null) {
+                        mapper.currentParts.map { p ->
+                            if (p.type == PartType.TOOL_CALL && p.tool != null && p.tool.snapshotRef == null) {
+                                p.copy(tool = p.tool.copy(snapshotRef = snapshotRef.ref, snapshotCommit = snapshotRef.commit))
+                            } else p
+                        }
+                    } else {
+                        mapper.currentParts
+                    }
+                    streamingFlow.value = StreamingMessage(assistantId, parts)
+                }
+            } catch (c: CancellationException) {
+                withContext(NonCancellable) { chatRepo.finishAssistantParts(chatId, assistantId, mapper.currentParts, MsgStatus.CANCELLED) }
+                streamingFlow.value = null
+                _ui.value = _ui.value.copy(busy = false)
+                DevelopmentWorkService.release(appContext, workId)
+                throw c
+            } catch (t: Throwable) {
+                errorMsg = t.message ?: "Grok Build run failed"
+            }
+            DevelopmentWorkService.release(appContext, workId)
+            val status2 = if (errorMsg == null) MsgStatus.COMPLETE else MsgStatus.ERROR
+            chatRepo.finishAssistantParts(chatId, assistantId, mapper.currentParts, status2)
+            if (!resultText.isNullOrBlank()) conversation.add(ChatMessage(ChatMessage.Role.ASSISTANT, resultText!!))
+            streamingFlow.value = null
+            _ui.value = _ui.value.copy(busy = false, error = errorMsg)
+            // Re-read session signals + billing so context / monthly limit stay accurate after the turn.
+            runCatching { refreshGrokAccountUsageInternal(force = true) }
+            if (status2 == MsgStatus.COMPLETE) {
+                withContext(NonCancellable) { maybeNameClaudeCodeChatAndProject(chatId, pid, isFreshProject, userText) }
+            }
+            if (grokOptionsDirty) {
+                grokOptionsDirty = false
+                grokProcesses.values.forEach { it.stop() }
+                grokProcesses.clear()
+            }
+        }
+    }
+
     // ── Engine handoff ──
 
     /**
-     * Moves the current chat from one real CLI to the other, seeding the incoming engine with a brief
+     * Moves the current chat from one real CLI to another, seeding the incoming engine with a brief
      * describing what has happened so far. The usual trigger is one account running out of rate-limit
      * headroom mid-task.
      *
-     * **What this is and isn't.** Session ids are not portable — Claude's `--resume` id indexes
-     * `~/.claude`, Codex's thread id indexes `~/.codex/sessions`, and neither can read the other's store.
-     * So this does not move a conversation object; it starts a fresh one in the other engine and tells it
-     * what it missed. That is far less lossy than it sounds, because the expensive shared context is not
-     * in the transcript at all — it is the working tree and git history, which both engines already see
-     * identically. What is genuinely lost is the outgoing engine's own cached reasoning.
-     *
-     * The brief is stored as a real user message, so it is visible in the transcript rather than being
-     * invisible prompt injection — if the handoff produces a confused reply, the reason is on screen.
+     * Session ids are not portable across Claude / Codex / Grok stores — this starts a fresh session
+     * in the target engine and hands over a summary; the working tree is already shared.
      */
     fun switchEngine(to: ChatMode) {
         if (!to.isAgentCli) return
@@ -1476,8 +2070,6 @@ class ChatViewModel @Inject constructor(
 
         viewModelScope.launch {
             val chatId = chatIdFlow.value
-            // With no chat yet there is nothing to hand off; just switch and let the first send start
-            // normally in the new engine.
             if (chatId == null) {
                 setMode(to)
                 return@launch
@@ -1485,13 +2077,14 @@ class ChatViewModel @Inject constructor(
 
             _ui.value = _ui.value.copy(mode = to, error = null)
             chatRepo.bindChatProject(chatId, projectId, modeString(to))
-            if (to == ChatMode.CODEX) checkCodexReadiness() else checkClaudeCodeReadiness()
+            when (to) {
+                ChatMode.CODEX -> checkCodexReadiness()
+                ChatMode.GROK -> checkGrokReadiness()
+                else -> checkClaudeCodeReadiness()
+            }
 
             val brief = buildHandoffBrief(from, to)
             if (brief != null) {
-                // Queued into the input rather than sent, so the user can add "…and finish the migration"
-                // or delete it outright. Auto-sending would spend a turn of the engine they just switched
-                // to precisely because they were short on quota.
                 _ui.value = _ui.value.copy(
                     input = brief,
                     notice = "Switched to ${engineLabel(to)}. A handoff summary is in the input box — edit or send it.",
@@ -1505,6 +2098,7 @@ class ChatViewModel @Inject constructor(
     private fun engineLabel(mode: ChatMode): String = when (mode) {
         ChatMode.CODEX -> "Codex"
         ChatMode.CLAUDE_CODE -> "Claude Code"
+        ChatMode.GROK -> "Grok Build"
         ChatMode.BUILD -> "Build"
         ChatMode.CHAT -> "Chat"
     }
@@ -1627,6 +2221,7 @@ class ChatViewModel @Inject constructor(
         }
         if (chat.mode == "claude_code") checkClaudeCodeReadiness()
         if (chat.mode == "codex") checkCodexReadiness()
+        if (chat.mode == "grok") checkGrokReadiness()
     }
 
     /** Explicitly continues an existing project in the CURRENT chat (project picker "Continue" pick)

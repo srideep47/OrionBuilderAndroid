@@ -23,7 +23,7 @@ import java.io.File
  * Claude-specific in it, so Codex gets preview QA, device automation, and the whole Godot bridge for
  * free just by having these env vars set on its process.
  */
-internal fun ensureOrionToolClient(toolchain: ClaudeCodeToolchain) {
+fun ensureOrionToolClient(toolchain: ClaudeCodeToolchain) {
     val client = File(toolchain.rootfsDir, "root/.local/bin/orion-tool")
     client.parentFile?.mkdirs()
     if (!client.exists() || client.readText() != ClaudeCodeProcess.ORION_TOOL_CLIENT) {

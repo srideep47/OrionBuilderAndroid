@@ -32,8 +32,9 @@ import javax.inject.Singleton
         ChatFtsEntity::class,
         ClaudeCodeSessionEntity::class,
         CodexSessionEntity::class,
+        GrokSessionEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class OrionDatabase : RoomDatabase() {
@@ -50,6 +51,7 @@ abstract class OrionDatabase : RoomDatabase() {
     abstract fun chatFtsDao(): ChatFtsDao
     abstract fun claudeCodeSessionDao(): ClaudeCodeSessionDao
     abstract fun codexSessionDao(): CodexSessionDao
+    abstract fun grokSessionDao(): GrokSessionDao
 }
 
 /**
@@ -74,6 +76,19 @@ internal val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
+/** Adds the `grok_sessions` table (see [GrokSessionEntity]). Additive only — preserves chat history. */
+internal val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `grok_sessions` (" +
+                "`projectId` TEXT NOT NULL, " +
+                "`sessionId` TEXT NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`projectId`))",
+        )
+    }
+}
+
 @Module
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
@@ -82,7 +97,7 @@ object DatabaseModule {
     @Singleton
     fun providesDatabase(@ApplicationContext context: Context): OrionDatabase =
         Room.databaseBuilder(context, OrionDatabase::class.java, "orion.db")
-            .addMigrations(MIGRATION_2_3)
+            .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
             .fallbackToDestructiveMigrationOnDowngrade()
             .fallbackToDestructiveMigration() // pre-release: no migration path yet for other schema bumps
             .build()
@@ -100,4 +115,5 @@ object DatabaseModule {
     @Provides fun chatFtsDao(db: OrionDatabase) = db.chatFtsDao()
     @Provides fun claudeCodeSessionDao(db: OrionDatabase) = db.claudeCodeSessionDao()
     @Provides fun codexSessionDao(db: OrionDatabase) = db.codexSessionDao()
+    @Provides fun grokSessionDao(db: OrionDatabase) = db.grokSessionDao()
 }

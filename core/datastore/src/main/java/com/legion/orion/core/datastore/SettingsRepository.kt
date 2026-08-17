@@ -36,6 +36,9 @@ class SettingsRepository @Inject constructor(
         val CODEX_MODEL = stringPreferencesKey("codex_model")
         val CODEX_EFFORT = stringPreferencesKey("codex_effort")
         val CODEX_SANDBOX = stringPreferencesKey("codex_sandbox")
+        val GROK_MODEL = stringPreferencesKey("grok_model")
+        val GROK_EFFORT = stringPreferencesKey("grok_effort")
+        val GROK_PERMISSION_MODE = stringPreferencesKey("grok_permission_mode")
     }
 
     val lastModelPath: Flow<String?> =
@@ -105,6 +108,21 @@ class SettingsRepository @Inject constructor(
     val codexSandbox: Flow<String> =
         context.settingsDataStore.data.map { it[Keys.CODEX_SANDBOX] ?: "danger-full-access" }
 
+    /** null = no `-m` flag, Grok Build uses its account/config default (often grok-build / grok-4.5). */
+    val grokModel: Flow<String?> =
+        context.settingsDataStore.data.map { it[Keys.GROK_MODEL] }
+
+    /**
+     * Passed as `--reasoning-effort`. Grok Build's live catalog exposes high / medium / low
+     * (default high on Grok 4.5). Older values (xhigh/max) are remapped in ChatViewModel.
+     */
+    val grokEffort: Flow<String> =
+        context.settingsDataStore.data.map { it[Keys.GROK_EFFORT] ?: "high" }
+
+    /** Default bypassPermissions so headless Bash/tools run unattended under proot (same rationale as Claude). */
+    val grokPermissionMode: Flow<String> =
+        context.settingsDataStore.data.map { it[Keys.GROK_PERMISSION_MODE] ?: "bypassPermissions" }
+
     suspend fun setLastModel(path: String, backend: String) {
         context.settingsDataStore.edit {
             it[Keys.LAST_MODEL_PATH] = path
@@ -160,6 +178,14 @@ class SettingsRepository @Inject constructor(
             if (model != null) it[Keys.CODEX_MODEL] = model else it.remove(Keys.CODEX_MODEL)
             it[Keys.CODEX_EFFORT] = effort
             it[Keys.CODEX_SANDBOX] = sandbox
+        }
+    }
+
+    suspend fun setGrokOptions(model: String?, effort: String, permissionMode: String) {
+        context.settingsDataStore.edit {
+            if (model != null) it[Keys.GROK_MODEL] = model else it.remove(Keys.GROK_MODEL)
+            it[Keys.GROK_EFFORT] = effort
+            it[Keys.GROK_PERMISSION_MODE] = permissionMode
         }
     }
 }

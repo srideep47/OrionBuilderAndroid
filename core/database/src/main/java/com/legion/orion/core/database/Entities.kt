@@ -205,3 +205,13 @@ data class CodexSessionEntity(
     val threadId: String,
     val createdAt: Long,
 )
+
+/** Maps a project to its Grok Build CLI session id for `--resume` (see [GrokSessionEntity] usage in
+ * the app's Grok engine). Independent of Claude/Codex rows so one project can hold sessions for all
+ * three engines at once. Continuity is one-shot `grok -p --resume <sessionId>` like Codex. */
+@Entity(tableName = "grok_sessions")
+data class GrokSessionEntity(
+    @PrimaryKey val projectId: String,
+    val sessionId: String,
+    val createdAt: Long,
+)

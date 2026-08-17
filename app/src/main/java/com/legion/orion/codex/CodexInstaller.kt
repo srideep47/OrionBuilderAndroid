@@ -53,8 +53,15 @@ class CodexInstaller(private val toolchain: CodexToolchain) {
         force: Boolean = false,
         onProgress: (String) -> Unit = {},
     ): CodexToolchain.Status = withContext(Dispatchers.IO) {
-        check(toolchain.base.status().let { it.provisioned || it.missing == listOf("claude CLI") }) {
-            "The Linux runtime must be installed before Codex — install it from the agent sign-in screen first."
+        check(
+            toolchain.base.status().let { status ->
+                status.provisioned ||
+                    status.missing.none {
+                        it in listOf("proot", "proot loader", "libtalloc", "libandroid-shmem", "Ubuntu rootfs")
+                    }
+            },
+        ) {
+            "The Linux runtime must be installed before Codex — Orion auto-installs it on first launch."
         }
 
         onProgress("Looking up the latest Codex release…")
