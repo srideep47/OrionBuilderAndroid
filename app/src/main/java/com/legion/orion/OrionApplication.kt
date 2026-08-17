@@ -2,8 +2,9 @@ package com.legion.orion
 
 import android.app.Application
 import com.alibaba.mls.api.ApplicationProvider
-import com.legion.orion.server.OrionServerBridge
 import com.legion.orion.claudecode.ClaudeToolBridge
+import com.legion.orion.runtime.RuntimeBootstrap
+import com.legion.orion.server.OrionServerBridge
 import com.localai.api.openai.di.ServiceLocator
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -19,6 +20,7 @@ class OrionApplication : Application() {
     interface BridgeEntryPoint {
         fun serverBridge(): OrionServerBridge
         fun claudeToolBridge(): ClaudeToolBridge
+        fun runtimeBootstrap(): RuntimeBootstrap
     }
 
     override fun onCreate() {
@@ -34,6 +36,8 @@ class OrionApplication : Application() {
             ServiceLocator.setLlmRuntimeController(bridge)
             // Loopback-only, random-token bridge used by Claude Code's `orion-tool` command.
             entryPoint.claudeToolBridge().start()
+            // Auto-install Linux/Claude/Codex/Grok/build tools/Node — no Install button required.
+            entryPoint.runtimeBootstrap().startIfNeeded()
         }
     }
 }

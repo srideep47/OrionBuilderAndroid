@@ -131,9 +131,16 @@ class ClaudeCodeProcess(
                 "Orion also provides the Bash command orion-tool. Use orion-tool status to inspect " +
                 "availability. For web QA use preview-qa, preview-tree, preview-console, preview-eval, " +
                 "and preview-screenshot; then use Read on /root/project/.orion/preview.png to inspect " +
-                "it visually. For installed Android app QA, device verification must be enabled by " +
-                "the user in Android Accessibility settings; then use android-project, android-build, android-launch, " +
-                "device-tree, device-click/device-type/device-tap, device-screenshot, and use Read on " +
+                "it visually. For INTERNET research and free asset acquisition use Orion's Internet " +
+                "Manager via orion-tool (shared by every AI on this device): " +
+                "orion-tool web-search <query> for current web info; orion-tool web-fetch <url> to " +
+                "read docs/pages as text; orion-tool web-download <url> <project-relative-path> to " +
+                "pull images/fonts/zips/models/CSS/JS into the project in realtime; " +
+                "orion-tool list-dev-identities to see user-owned emails reserved for future login " +
+                "assist. Prefer these over inventing outdated facts. For installed Android app QA, " +
+                "device verification must be enabled by the user in Android Accessibility settings; " +
+                "then use android-project, android-build, android-launch, device-tree, " +
+                "device-click/device-type/device-tap, device-screenshot, and use Read on " +
                 "/root/project/.orion/device.png. Never claim visual UI verification without actually " +
                 "reading the screenshot and checking the relevant UI state. Run orion-tool help for syntax."
 
@@ -181,8 +188,12 @@ class ClaudeCodeProcess(
         const val ORION_TOOL_CLIENT = """#!/usr/bin/python3
 import json, os, socket, sys
 
-HELP = '''Orion visual/device QA commands:
+HELP = '''Orion visual/device QA + Internet Manager commands:
   orion-tool status
+  orion-tool web-search <query> [max_results]
+  orion-tool web-fetch <url> [text|html|raw] [max_chars]
+  orion-tool web-download <url> <project-relative-path> [max_bytes]
+  orion-tool list-dev-identities
   orion-tool preview-qa | preview-tree | preview-console
   orion-tool preview-screenshot [relative.png]
   orion-tool preview-eval <javascript>
@@ -222,6 +233,7 @@ HELP = '''Orion visual/device QA commands:
   orion-tool godot-change-scene <res://path.tscn>
   orion-tool godot-project-setting <name> [json-value]
   orion-tool godot-input-actions
+Internet: web-search/web-fetch for research; web-download for free assets into the project.
 Screenshots default to .orion/preview.png and .orion/device.png and .orion/godot.png. Read the PNG afterward.'''
 
 if len(sys.argv) < 2 or sys.argv[1] in ('help', '--help', '-h'):
@@ -236,6 +248,24 @@ def parse_val(s):
 if cmd in ('preview_screenshot','device_screenshot','godot_screenshot') and args: req['output'] = args[0]
 elif cmd == 'preview_eval': req['expression'] = ' '.join(args)
 elif cmd == 'preview_navigate': req['url'] = args[0] if args else ''
+elif cmd == 'web_search':
+    if not args: print('web-search needs query [max_results]', file=sys.stderr); sys.exit(2)
+    # Allow: web-search free gltf robot model
+    # or:    web-search "exact phrase" 8
+    if len(args) >= 2 and args[-1].isdigit():
+        req['query'] = ' '.join(args[:-1]); req['max_results'] = int(args[-1])
+    else:
+        req['query'] = ' '.join(args)
+elif cmd == 'web_fetch':
+    if not args: print('web-fetch needs url [text|html|raw] [max_chars]', file=sys.stderr); sys.exit(2)
+    req['url'] = args[0]
+    if len(args) > 1 and args[1] in ('text','html','raw'): req['mode'] = args[1]
+    if len(args) > 2 and args[2].isdigit(): req['max_chars'] = int(args[2])
+    elif len(args) > 1 and args[1].isdigit(): req['max_chars'] = int(args[1])
+elif cmd == 'web_download':
+    if len(args) < 2: print('web-download needs url project-relative-path [max_bytes]', file=sys.stderr); sys.exit(2)
+    req['url'], req['path'] = args[0], args[1]
+    if len(args) > 2 and args[2].isdigit(): req['max_bytes'] = int(args[2])
 elif cmd == 'device_click': req['selector'] = ' '.join(args)
 elif cmd == 'device_type':
     if len(args) < 2: print('device-type needs selector and text', file=sys.stderr); sys.exit(2)

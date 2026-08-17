@@ -6,6 +6,8 @@ import com.legion.orion.automation.DeviceAutomationController
 import com.legion.orion.build.ApkBuildController
 import com.legion.orion.build.AndroidProjectLocator
 import com.legion.orion.feature.preview.PreviewController
+import com.legion.orion.internet.DevIdentityStore
+import com.legion.orion.internet.InternetManager
 import com.legion.orion.runtime.GodotController
 import com.legion.orion.runtime.GodotProcessController
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -86,6 +88,8 @@ class ClaudeToolBridge @Inject constructor(
     private val apkBuilder: ApkBuildController,
     private val godot: GodotController,
     private val godotProcess: GodotProcessController,
+    private val internet: InternetManager,
+    private val devIdentities: DevIdentityStore,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json { ignoreUnknownKeys = true }
@@ -150,8 +154,36 @@ class ClaudeToolBridge @Inject constructor(
                 "status" -> success(
                     "Orion tool bridge ready\n" +
                         "preview=${if (preview.isAttached) "attached" else "not-open"}\n" +
-                        "device-verification=${if (device.connected.value) "enabled" else "disabled"}",
+                        "device-verification=${if (device.connected.value) "enabled" else "disabled"}\n" +
+                        "internet=web_search,web_fetch,web_download,list_dev_identities",
                 )
+                "web_search" -> {
+                    val query = request.str("query") ?: error("Missing query")
+                    val max = request.number("max_results")?.toInt() ?: 8
+                    val hits = internet.search(query, max).getOrThrow()
+                    success(internet.formatSearch(hits))
+                }
+                "web_fetch" -> {
+                    val url = request.str("url") ?: error("Missing url")
+                    val mode = request.str("mode") ?: "text"
+                    val maxChars = request.number("max_chars")?.toInt()
+                        ?: InternetManager.DEFAULT_FETCH_CHARS
+                    val page = internet.fetch(url, mode, maxChars).getOrThrow()
+                    success(internet.formatFetch(page))
+                }
+                "web_download" -> {
+                    val url = request.str("url") ?: error("Missing url")
+                    val path = request.str("path") ?: error("Missing path")
+                    val maxBytes = request.number("max_bytes")?.toLong()
+                        ?: InternetManager.DEFAULT_DOWNLOAD_BYTES
+                    val project = projectDir(request)
+                    val result = internet.download(url, project, path, maxBytes).getOrThrow()
+                    success(
+                        internet.formatDownload(result) +
+                            "\nGuest path: ${guestPath(result.path, request)}",
+                    )
+                }
+                "list_dev_identities" -> success(devIdentities.formatPublicList(devIdentities.list()))
                 "session_status" -> {
                     val project = projectDir(request).canonicalPath
                     val data = request["data"] as? JsonObject ?: error("Missing status data")

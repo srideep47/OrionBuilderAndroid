@@ -1,0 +1,73 @@
+﻿{
+  "fetched_at": "2026-08-04T20:07:32.294105135Z",
+  "grok_version": "0.2.118",
+  "auth_method": "session",
+  "origin": "https://cli-chat-proxy.grok.com/v1/models",
+  "etag": "W/\"6772649606089578003\"",
+  "models": {
+    "grok-4.5": {
+      "info": {
+        "id": "grok-4.5",
+        "model": "grok-4.5",
+        "base_url": "https://cli-chat-proxy.grok.com/v1",
+        "name": "Grok 4.5",
+        "description": "SpaceXAI's new frontier model",
+        "max_completion_tokens": null,
+        "temperature": null,
+        "top_p": null,
+        "api_backend": "responses",
+        "auth_scheme": "bearer",
+        "extra_headers": {},
+        "context_window": 500000,
+        "auto_compact_threshold_percent": 80,
+        "system_prompt_label": "Grok 4.5",
+        "use_concise": false,
+        "agent_type": "grok-build-plan",
+        "inference_idle_timeout_secs": null,
+        "max_retries": null,
+        "hidden": false,
+        "supported_in_api": true,
+        "reasoning_effort": "high",
+        "supports_reasoning_effort": true,
+        "reasoning_efforts": [
+          {
+            "id": "high",
+            "value": "high",
+            "label": "High Effort",
+            "description": "Highest implementation quality with extensive reasoning",
+            "default": true
+          },
+          {
+            "id": "medium",
+            "value": "medium",
+            "label": "Medium Effort",
+            "description": "Balanced effort with standard implementation and testing",
+            "default": false
+          },
+          {
+            "id": "low",
+            "value": "low",
+            "label": "Low Effort",
+            "description": "Quick, fast implementations",
+            "default": false
+          }
+        ],
+        "supports_backend_search": true,
+        "compactions_remaining": null,
+        "compaction_at_tokens": true,
+        "show_model_fingerprint": false,
+        "stream_tool_calls": null,
+        "laziness_detector": {
+          "enabled": false,
+          "max_nudges_per_session": 0,
+          "idle_threshold_ms": null,
+          "min_confidence": null,
+          "include_reasoning": null
+        }
+      },
+      "api_key": null,
+      "env_key": null,
+      "api_base_url": null
+    }
+  }
+}

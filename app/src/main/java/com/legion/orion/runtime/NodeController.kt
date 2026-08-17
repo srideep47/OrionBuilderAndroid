@@ -48,6 +48,14 @@ class NodeController @Inject constructor(
     private val nodeDir: File get() = File(context.filesDir, "node")
     private val base = "http://127.0.0.1:$CONTROL_PORT"
 
+    /**
+     * Extracts bundled npm/host assets without starting the :node process. Used by first-launch
+     * [com.legion.orion.runtime.RuntimeBootstrap] so tooling is on disk before the user opens Preview.
+     */
+    suspend fun ensureAssetsExtracted() = withContext(Dispatchers.IO) {
+        AssetExtractor.extractOnce(context, "node", nodeDir, version = ASSET_VERSION)
+    }
+
     /** Extracts assets, launches the :node service, and waits for the host to report healthy. */
     suspend fun ensureStarted(): Boolean = startMutex.withLock {
         if (started && health()) return@withLock true

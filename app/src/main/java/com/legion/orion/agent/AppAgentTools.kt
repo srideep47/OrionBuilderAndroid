@@ -11,6 +11,9 @@ import com.legion.orion.engine.agent.ToolResult
 import com.legion.orion.engine.agent.tools.Param
 import com.legion.orion.engine.agent.tools.objectSchema
 import com.legion.orion.feature.preview.PreviewController
+import com.legion.orion.internet.DevIdentityStore
+import com.legion.orion.internet.InternetAgentTools
+import com.legion.orion.internet.InternetManager
 import com.legion.orion.runtime.DevServerState
 import com.legion.orion.runtime.NodeController
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -24,8 +27,9 @@ import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Agent tools that need app-level capabilities (scaffolds, the Node runtime, the dev server). The
- * pure file/search tools live in engine:agent; these are appended to the registry at runtime.
+ * Agent tools that need app-level capabilities (scaffolds, the Node runtime, the dev server,
+ * Internet Manager). The pure file/search tools live in engine:agent; these are appended to the
+ * registry at runtime.
  */
 @Singleton
 class AppAgentTools @Inject constructor(
@@ -39,6 +43,8 @@ class AppAgentTools @Inject constructor(
     private val p2p: com.legion.orion.infra.p2p.P2pController,
     private val media: com.legion.orion.data.media.MediaManager,
     private val device: DeviceAutomationController,
+    private val internet: InternetManager,
+    private val devIdentities: DevIdentityStore,
 ) {
     fun list(): List<AgentTool> = listOf(
         CreateProjectTool(scaffolds),
@@ -64,7 +70,7 @@ class AppAgentTools @Inject constructor(
         RunBuildJobTool(buildOffload, p2p),
         CheckBuildJobTool(buildOffload),
         QueueMediaJobTool(media),
-    )
+    ) + InternetAgentTools.list(internet, devIdentities)
 }
 
 /** Captures the currently visible Android app after the user enables Orion device verification. */

@@ -194,6 +194,10 @@ private fun ModelPill(ui: ChatUiState, engine: EngineState, onClick: () -> Unit)
         CodexModelPill(ui.codex, onClick)
         return
     }
+    if (ui.mode == ChatMode.GROK) {
+        GrokModelPill(ui.grok, onClick)
+        return
+    }
     val provider = ui.selectedProvider
     val ready = engine.status.name == "READY" || engine.status.name == "GENERATING"
     Row(
@@ -224,6 +228,39 @@ private fun ModelPill(ui: ChatUiState, engine: EngineState, onClick: () -> Unit)
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.widthIn(max = 96.dp),
+        )
+        Icon(Icons.Outlined.ExpandMore, null, tint = Cosmos.TextMuted, modifier = Modifier.size(15.dp))
+    }
+}
+
+@Composable
+private fun GrokModelPill(gx: GrokUiState, onClick: () -> Unit) {
+    val modelLabel = gx.availableModels.firstOrNull { it.id == gx.model }?.name
+        ?: gx.model
+        ?: "Grok 4.5"
+    val effortLabel = gx.effortOptions.firstOrNull { it.id == gx.effort }?.label
+        ?: gx.effort.replaceFirstChar(Char::uppercase)
+    Row(
+        Modifier
+            .liquidGlass(shape = Liquid.ShapePill, fillTopAlpha = 0.09f)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            Modifier
+                .size(7.dp)
+                .clip(CircleShape)
+                .background(if (gx.loggedIn) Cosmos.Green else Cosmos.Amber),
+        )
+        Text(
+            "$modelLabel · $effortLabel".take(22),
+            style = MaterialTheme.typography.labelMedium,
+            color = Cosmos.Text,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 120.dp),
         )
         Icon(Icons.Outlined.ExpandMore, null, tint = Cosmos.TextMuted, modifier = Modifier.size(15.dp))
     }
@@ -300,6 +337,7 @@ internal fun ChatContent(
 ) {
     val listState = rememberLazyListState()
     var claudeUsageExpanded by rememberSaveable { mutableStateOf(true) }
+    var grokUsageExpanded by rememberSaveable { mutableStateOf(true) }
     var followLatest by remember { mutableStateOf(true) }
     val bottomChrome = LocalBottomChromeHeight.current
     var commandPickerOpen by rememberSaveable { mutableStateOf(false) }
@@ -365,12 +403,16 @@ internal fun ChatContent(
                     (ui.claudeCode.loggedIn || ui.claudeCode.sessionCostUsd > 0 ||
                         ui.claudeCode.contextWindowTokens > 0)) ||
                 (ui.mode == ChatMode.CODEX &&
-                    (ui.codex.loggedIn || ui.codex.lastTurnOutputTokens > 0)),
+                    (ui.codex.loggedIn || ui.codex.lastTurnOutputTokens > 0)) ||
+                (ui.mode == ChatMode.GROK &&
+                    (ui.grok.loggedIn || ui.grok.lastTurnOutputTokens > 0 || ui.grok.sessionCostUsd > 0 ||
+                        ui.grok.contextWindowTokens > 0)),
         ) {
             when (ui.mode) {
                 ChatMode.CLAUDE_CODE -> ClaudeCodeStatsStrip(ui, onClick = { claudeUsageExpanded = !claudeUsageExpanded })
                 ChatMode.CODEX -> CodexStatsStrip(ui)
-                // The generic strip's local token estimate is meaningless for either real CLI, which
+                ChatMode.GROK -> GrokStatsStrip(ui, onClick = { grokUsageExpanded = !grokUsageExpanded })
+                // The generic strip's local token estimate is meaningless for real CLIs, which
                 // report their own authoritative numbers.
                 else -> StatsStrip(ui)
             }
@@ -381,6 +423,13 @@ internal fun ChatContent(
             exit = shrinkVertically() + fadeOut(),
         ) {
             ClaudeCodeUsageDetails(ui, onRefresh = vm::refreshClaudeAccountUsage)
+        }
+        AnimatedVisibility(
+            visible = ui.mode == ChatMode.GROK && ui.grok.loggedIn && grokUsageExpanded,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut(),
+        ) {
+            GrokUsageDetails(ui, onRefresh = { vm.refreshGrokAccountUsage(force = true) })
         }
 
         if (ui.mode == ChatMode.CLAUDE_CODE && (!ui.claudeCode.installed || !ui.claudeCode.loggedIn || ui.claudeCode.installProgress != null)) {
@@ -399,6 +448,15 @@ internal fun ChatContent(
                 onInstall = { vm.installCodexRuntime() },
                 onSignIn = vm::beginCodexLogin,
                 onCancelSignIn = vm::cancelCodexLogin,
+            )
+        }
+
+        if (ui.mode == ChatMode.GROK && (!ui.grok.installed || !ui.grok.loggedIn || ui.grok.installProgress != null)) {
+            GrokSetupBanner(
+                ui = ui,
+                onInstall = { vm.installGrokRuntime() },
+                onSignIn = vm::beginGrokLogin,
+                onCancelSignIn = vm::cancelGrokLogin,
             )
         }
 
@@ -564,6 +622,108 @@ private fun CodexStatsStrip(ui: ChatUiState) {
             style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
             color = Cosmos.TextMuted,
         )
+    }
+}
+
+@Composable
+private fun GrokStatsStrip(ui: ChatUiState, onClick: () -> Unit) {
+    val gx = ui.grok
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (ui.busy) {
+            CircularProgressIndicator(
+                Modifier.size(11.dp),
+                color = Cosmos.Violet,
+                strokeWidth = 1.5.dp,
+            )
+        }
+        Text(
+            "context ${"%.0f".format(gx.contextUsedPercentage ?: 0.0)}%",
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+            color = Cosmos.TextMuted,
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            if (gx.usageLimit > 0) {
+                "limit ${"%.0f".format(gx.usagePercent ?: 0.0)}%"
+            } else {
+                "${compactTokenCount(gx.contextUsedTokens)} / ${compactTokenCount(gx.contextWindowTokens)}"
+            },
+            style = MaterialTheme.typography.labelSmall.copy(fontFamily = MonoFamily),
+            color = Cosmos.TextMuted,
+        )
+        Icon(
+            Icons.Outlined.ExpandMore,
+            contentDescription = "Show Grok usage",
+            tint = Cosmos.TextFaint,
+            modifier = Modifier.size(14.dp),
+        )
+    }
+}
+
+@Composable
+private fun GrokUsageDetails(ui: ChatUiState, onRefresh: () -> Unit) {
+    val gx = ui.grok
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .liquidGlass(shape = Liquid.ShapeSmall, fillTopAlpha = 0.08f)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(9.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Usage",
+                style = MaterialTheme.typography.labelMedium,
+                color = Cosmos.TextDim,
+            )
+            Spacer(Modifier.weight(1f))
+            if (gx.accountUsageRefreshing) {
+                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = Cosmos.Violet)
+            } else {
+                Icon(
+                    Icons.Outlined.Refresh,
+                    contentDescription = "Refresh Grok usage",
+                    tint = Cosmos.TextMuted,
+                    modifier = Modifier.size(17.dp).clickable(onClick = onRefresh),
+                )
+            }
+        }
+        UsageProgressRow(
+            label = "Context",
+            detail = if (gx.contextWindowTokens > 0) {
+                "${compactTokenCount(gx.contextUsedTokens)} / ${compactTokenCount(gx.contextWindowTokens)} " +
+                    "(${"%.0f".format(gx.contextUsedPercentage ?: 0.0)}%)"
+            } else {
+                "Waiting for first response"
+            },
+            progress = ((gx.contextUsedPercentage ?: 0.0) / 100.0).toFloat(),
+        )
+        // Grok Build enforces a monthly billing-period cap via /v1/billing (not a separate weekly API).
+        UsageProgressRow(
+            label = "Monthly limit",
+            detail = if (gx.usageLimit > 0) {
+                "${compactTokenCount(gx.usageUsed)} / ${compactTokenCount(gx.usageLimit)} " +
+                    "(${"%.0f".format(gx.usagePercent ?: 0.0)}% used)"
+            } else {
+                "Loading…"
+            },
+            progress = ((gx.usagePercent ?: 0.0) / 100.0).toFloat(),
+        )
+        gx.accountUsageError?.let { error ->
+            Text(
+                "Could not refresh: $error",
+                style = MaterialTheme.typography.labelSmall,
+                color = Cosmos.Amber,
+            )
+        }
     }
 }
 
@@ -740,12 +900,13 @@ private fun ClaudeCodeSetupBanner(
             }
             !cc.installed -> {
                 Text(
-                    "Runs the real Claude Code CLI on-device, billed to your Claude subscription — " +
-                        "not pay-per-token API. One-time install, about 150MB.",
+                    "Preparing the on-device Claude Code runtime automatically (Linux + CLI). " +
+                        "This only happens once — billed to your Claude subscription, not API tokens.",
                     style = MaterialTheme.typography.labelSmall,
                     color = Cosmos.TextMuted,
                 )
-                LiquidButton("Install", onClick = onInstall, compact = true)
+                // Fallback only if auto-bootstrap failed or was interrupted.
+                LiquidButton("Retry install", onClick = onInstall, compact = true)
             }
             cc.loginUrl != null -> {
                 Text(
@@ -845,19 +1006,12 @@ private fun CodexSetupBanner(
             }
             !cx.installed -> {
                 Text(
-                    if (cx.needsOnlyBinary) {
-                        "Downloads the real Codex CLI into the Linux environment you already have. " +
-                            "About 105MB to download, 257MB on disk. Needs a network connection."
-                    } else {
-                        "Codex shares the same Linux environment as Claude Code — install that first " +
-                            "from the Claude Code setup, then come back here."
-                    },
+                    "Codex installs automatically with Orion's first-run setup " +
+                        "(Linux + Codex CLI). If a network download was interrupted, retry below.",
                     style = MaterialTheme.typography.labelSmall,
                     color = Cosmos.TextMuted,
                 )
-                if (cx.needsOnlyBinary) {
-                    LiquidButton("Download Codex", onClick = onInstall, compact = true)
-                }
+                LiquidButton("Retry Codex install", onClick = onInstall, compact = true)
             }
             cx.loginUrl != null -> {
                 Text(
@@ -900,6 +1054,84 @@ private fun CodexSetupBanner(
     }
 }
 
+/**
+ * Grok Build provisioning/sign-in banner — same device-code shape as [CodexSetupBanner]
+ * (`grok login --device-auth`): URL + short code, no paste-back field.
+ */
+@Composable
+private fun GrokSetupBanner(
+    ui: ChatUiState,
+    onInstall: () -> Unit,
+    onSignIn: () -> Unit,
+    onCancelSignIn: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val gx = ui.grok
+    val context = LocalContext.current
+
+    Column(
+        modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .liquidGlass(shape = Liquid.ShapeSmall, fillTopAlpha = 0.1f)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Set up Grok Build", style = MaterialTheme.typography.labelLarge, color = Cosmos.Text)
+        when {
+            gx.installProgress != null -> {
+                Text(gx.installProgress, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted)
+            }
+            !gx.installed -> {
+                Text(
+                    "Grok Build installs automatically with Orion's first-run setup " +
+                        "(Linux + Grok CLI). If a network download was interrupted, retry below.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
+                LiquidButton("Retry Grok install", onClick = onInstall, compact = true)
+            }
+            gx.loginUrl != null -> {
+                Text(
+                    "Open this page and enter the code below to link your Grok / SuperGrok account. " +
+                        "You can do this on another device — Grok will pick it up automatically.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
+                gx.loginUserCode?.let { code ->
+                    Text(
+                        code,
+                        style = MaterialTheme.typography.titleMedium.copy(fontFamily = MonoFamily),
+                        color = Cosmos.Violet3,
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LiquidButton(
+                        "Open sign-in page",
+                        compact = true,
+                        onClick = { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(gx.loginUrl))) } },
+                    )
+                    LiquidButton(
+                        "Cancel",
+                        compact = true,
+                        style = LiquidButtonStyle.Glass,
+                        onClick = onCancelSignIn,
+                    )
+                }
+            }
+            !gx.loggedIn -> {
+                Text(
+                    "Sign in with your xAI / SuperGrok account — simple device-code login, no API key required.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextMuted,
+                )
+                LiquidButton(if (gx.loginBusy) "Starting…" else "Sign in", compact = true, onClick = onSignIn)
+            }
+        }
+        gx.loginError?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = Cosmos.Red) }
+    }
+}
+
 @Composable
 private fun EmptyChat(mode: ChatMode) {
     Column(
@@ -939,6 +1171,7 @@ private fun EmptyChat(mode: ChatMode) {
                 ChatMode.BUILD -> "What should we build?"
                 ChatMode.CLAUDE_CODE -> "What should Claude Code do?"
                 ChatMode.CODEX -> "What should Codex do?"
+                ChatMode.GROK -> "What should Grok Build do?"
                 ChatMode.CHAT -> "Ask Orion anything"
             },
             style = MaterialTheme.typography.headlineSmall.copy(brush = Cosmos.TitleGradient),
@@ -950,6 +1183,7 @@ private fun EmptyChat(mode: ChatMode) {
                 ChatMode.BUILD -> "On-device agent with tools, snapshots and preview"
                 ChatMode.CLAUDE_CODE -> "The real Claude Code CLI, billed to your subscription"
                 ChatMode.CODEX -> "The real Codex CLI, billed to your ChatGPT plan"
+                ChatMode.GROK -> "The real Grok Build CLI, billed to your xAI / SuperGrok account"
                 ChatMode.CHAT -> "Local-first. Your words never have to leave the phone."
             },
             style = MaterialTheme.typography.bodySmall,
@@ -1069,6 +1303,20 @@ private fun CommandPickerSheet(
                 ready = ui.codex.loggedIn,
                 onClick = { onChoose(ChatMode.CODEX) },
             )
+            CommandPickerRow(
+                title = "Grok Build",
+                subtitle = when {
+                    !ui.grok.installed -> "Install the Grok Build CLI into the shared Linux runtime"
+                    ui.grok.loggedIn -> "${ui.grok.model ?: "Grok 4.5"} · ${ui.grok.effort.ifBlank { "default" }} effort"
+                    else -> "Sign in with your xAI / SuperGrok account"
+                },
+                mode = ChatMode.GROK,
+                selected = ui.mode == ChatMode.GROK,
+                status = if (ui.grok.loggedIn) "Ready" else if (ui.grok.installed) "Sign in" else "Install",
+                icon = Icons.Outlined.Terminal,
+                ready = ui.grok.loggedIn,
+                onClick = { onChoose(ChatMode.GROK) },
+            )
 
             if (ui.providers.isNotEmpty()) {
                 Text(
@@ -1172,9 +1420,8 @@ private fun InputBar(
             Icon(
                 when (ui.mode) {
                     ChatMode.BUILD -> Icons.Outlined.Build
-                    // Both CLI engines are terminal-backed; the label beside the icon is what
-                    // distinguishes them, so they intentionally share the glyph.
-                    ChatMode.CLAUDE_CODE, ChatMode.CODEX -> Icons.Outlined.Terminal
+                    // CLI engines are terminal-backed; the label beside the icon distinguishes them.
+                    ChatMode.CLAUDE_CODE, ChatMode.CODEX, ChatMode.GROK -> Icons.Outlined.Terminal
                     ChatMode.CHAT -> Icons.Outlined.ChatBubbleOutline
                 },
                 contentDescription = "Mode",
@@ -1186,6 +1433,7 @@ private fun InputBar(
                     ChatMode.BUILD -> "Build"
                     ChatMode.CLAUDE_CODE -> "Claude Code"
                     ChatMode.CODEX -> "Codex"
+                    ChatMode.GROK -> "Grok Build"
                     ChatMode.CHAT -> "Chat"
                 },
                 style = MaterialTheme.typography.labelSmall,
@@ -2093,6 +2341,244 @@ internal fun CodexOptionsSheet(
                 Text(
                     "Codex will stop active work and remove this account from Orion. Stored Codex " +
                         "conversation threads are cleared too, since they belong to this account.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmLogout = false
+                    onLogout()
+                }) {
+                    Text("Log out", color = Cosmos.Red)
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+/**
+ * Grok Build options sheet — account, model, effort, permission mode, reinstall, engine switch.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun GrokOptionsSheet(
+    ui: ChatUiState,
+    onPick: (model: String?, effort: String, permissionMode: String) -> Unit,
+    onSignIn: () -> Unit,
+    onLogout: () -> Unit,
+    onReinstall: () -> Unit,
+    onSwitchToClaude: () -> Unit,
+    onSwitchToCodex: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val gx = ui.grok
+    var confirmLogout by remember { mutableStateOf(false) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xF20A0618),
+        dragHandle = null,
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text(
+                "Grok Build options",
+                style = MaterialTheme.typography.titleMedium.copy(brush = Cosmos.TitleGradient),
+                fontWeight = FontWeight.Bold,
+            )
+
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .liquidGlass(shape = Liquid.ShapeSmall, fillTopAlpha = 0.08f)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                Text("Account", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                if (gx.loggedIn) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Icon(Icons.Outlined.Person, null, tint = Cosmos.Violet3, modifier = Modifier.size(18.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                gx.email ?: gx.authMethod ?: "Signed in",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = Cosmos.Text,
+                            )
+                            Text(
+                                listOfNotNull(
+                                    gx.subscriptionTier?.takeIf { it.isNotBlank() },
+                                    gx.installedVersion?.let { "CLI $it" },
+                                ).joinToString(" · ").ifBlank { "Grok Build account" },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Cosmos.TextMuted,
+                            )
+                        }
+                        if (gx.accountActionBusy) {
+                            CircularProgressIndicator(Modifier.size(17.dp), strokeWidth = 1.5.dp, color = Cosmos.Violet)
+                        }
+                    }
+                    LiquidButton(
+                        "Log out",
+                        compact = true,
+                        style = LiquidButtonStyle.Destructive,
+                        enabled = !gx.accountActionBusy && !gx.loginBusy,
+                        onClick = { confirmLogout = true },
+                    )
+                } else {
+                    Text(
+                        if (gx.installed) "No Grok account is signed in on this device."
+                        else "Download the Grok Build CLI to sign in on this device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Cosmos.TextMuted,
+                    )
+                    LiquidButton(
+                        if (gx.loginBusy) "Starting sign-in…" else "Sign in",
+                        compact = true,
+                        enabled = gx.installed && !gx.loginBusy && !gx.accountActionBusy,
+                        onClick = onSignIn,
+                    )
+                }
+                gx.accountActionError?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = Cosmos.Red)
+                }
+            }
+
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .liquidGlass(shape = Liquid.ShapeSmall, fillTopAlpha = 0.08f)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text("Continue in another engine", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                Text(
+                    "Hands this conversation to Claude Code or Codex with a summary. All engines share the same project files.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextFaint,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LiquidButton(
+                        "Claude Code",
+                        compact = true,
+                        style = LiquidButtonStyle.Glass,
+                        enabled = !ui.busy,
+                        onClick = { onSwitchToClaude(); onDismiss() },
+                    )
+                    LiquidButton(
+                        "Codex",
+                        compact = true,
+                        style = LiquidButtonStyle.Glass,
+                        enabled = !ui.busy,
+                        onClick = { onSwitchToCodex(); onDismiss() },
+                    )
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Model", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val models = gx.availableModels
+                        .filter { !it.id.equals("grok-build", ignoreCase = true) }
+                        .ifEmpty { listOf(GrokModelUi.DEFAULT) }
+                    models.forEach { model ->
+                        LiquidChip(
+                            text = model.name,
+                            selected = gx.model == model.id,
+                            onClick = {
+                                val effort = if (gx.effort in model.efforts.map { it.id }) {
+                                    gx.effort
+                                } else {
+                                    model.defaultEffort
+                                }
+                                onPick(model.id, effort, gx.permissionMode)
+                            },
+                        )
+                    }
+                }
+                gx.availableModels.firstOrNull { it.id == gx.model }?.let { selected ->
+                    Text(
+                        "${compactTokenCount(selected.contextWindow)} context",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Cosmos.TextMuted,
+                    )
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Effort", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val efforts = gx.effortOptions
+                        .filter { it.id in setOf("high", "medium", "low") }
+                        .ifEmpty { GrokEffortUi.DEFAULTS }
+                    efforts.forEach { effort ->
+                        LiquidChip(
+                            text = effort.label, // High / Medium / Low
+                            selected = gx.effort == effort.id,
+                            onClick = { onPick(gx.model, effort.id, gx.permissionMode) },
+                        )
+                    }
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Permissions", style = MaterialTheme.typography.labelMedium, color = Cosmos.TextMuted)
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    GrokUiState.PERMISSION_OPTIONS.forEach { mode ->
+                        LiquidChip(
+                            text = when (mode) {
+                                "bypassPermissions" -> "Full access"
+                                "acceptEdits" -> "Accept edits"
+                                "default" -> "Ask"
+                                "plan" -> "Plan"
+                                else -> mode
+                            },
+                            selected = gx.permissionMode == mode,
+                            onClick = { onPick(gx.model, gx.effort, mode) },
+                        )
+                    }
+                }
+                Text(
+                    "Full access is the working default on Android so headless Bash and tools run " +
+                        "without prompts that nobody can answer.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Cosmos.TextFaint,
+                )
+            }
+
+            if (gx.installed) {
+                LiquidButton(
+                    "Re-download Grok Build CLI",
+                    compact = true,
+                    style = LiquidButtonStyle.Glass,
+                    enabled = gx.installProgress == null,
+                    onClick = onReinstall,
+                )
+                gx.installProgress?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = Cosmos.TextMuted)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+    }
+
+    if (confirmLogout) {
+        AlertDialog(
+            onDismissRequest = { confirmLogout = false },
+            title = { Text("Log out of Grok Build?") },
+            text = {
+                Text(
+                    "Grok will stop active work and remove this account from Orion. Stored Grok " +
+                        "session ids are cleared too, since they belong to this account.",
                 )
             },
             confirmButton = {
